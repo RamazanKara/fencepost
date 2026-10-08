@@ -1,0 +1,8 @@
+{
+  "captured": "2026-10-08",
+  "source": "https://github.com/modelcontextprotocol/servers/blob/main/src/memory/index.ts",
+  "sourceSHA256": "fa1d38913ecdfca22231dbcf3b047548417f2ca862ef42de69394883223c32b6",
+  "filesystemSource": "https://github.com/modelcontextprotocol/servers/blob/main/src/filesystem/index.ts",
+  "filesystemSourceSHA256": "bff21de612c59d64b351f70615f44563f0efe76666a75aa52450ebe6fae6584a",
+  "license": "Upstream MIT / Apache-2.0 transition; complete upstream notice in LICENSE. Descriptions are verbatim. Memory schemas are test placeholders; filesystem schemas represent the listed fields."
+}

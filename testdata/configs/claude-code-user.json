@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "user": {"command": "server", "args": []}
+  },
+  "projects": {
+    "PROJECT": {
+      "mcpServers": {"local": {"command": "local-server"}}
+    },
+    "unrelated": {
+      "mcpServers": {"ignored": {"command": "never-start"}}
+    }
+  }
+}

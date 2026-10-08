@@ -1,0 +1,5 @@
+sarif-schema-2.1.0.json is the OASIS SARIF 2.1.0 JSON Schema, retrieved 2026-10-08.
+Source: https://github.com/oasis-tcs/sarif-spec/blob/main/sarif-2.1/schema/sarif-schema-2.1.0.json
+Copyright OASIS Open. Schema redistribution is permitted under the OASIS
+schema notices: https://www.oasis-open.org/policies-guidelines/ipr/
+Used without modification for conformance testing.

@@ -1,0 +1,5 @@
+{
+  "mcp.servers": {
+    "vscode-dotted": {"command": "server"}
+  }
+}

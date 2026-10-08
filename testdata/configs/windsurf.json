@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "windsurf": {"serverUrl": "https://example.invalid/mcp", "headers": {"Authorization": "Bearer ${env:TOKEN}"}}
+  }
+}

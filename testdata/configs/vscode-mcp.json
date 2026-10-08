@@ -1,0 +1,6 @@
+{
+  // A comment with a fake "servers" key.
+  "servers": {
+    "vscode": {"type": "stdio", "command": "server", "args": ["https://example.invalid/*keep*/",],},
+  },
+}

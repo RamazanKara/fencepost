@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "settings": {"command": "legacy-settings-server"}
+  }
+}

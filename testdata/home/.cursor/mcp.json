@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "packages": {
+      "command": "npx",
+      "args": ["-y", "@example/mcp-tools"]
+    },
+    "remote": {
+      "url": "http://tools.example.invalid/mcp",
+      "headers": {"Authorization": "Bearer fixture-only-not-a-real-token"}
+    }
+  }
+}

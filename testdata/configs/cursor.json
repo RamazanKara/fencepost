@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "cursor": {"url": "https://example.invalid/mcp", "headers": {"X-API-Key": "${env:API_KEY}"}}
+  }
+}

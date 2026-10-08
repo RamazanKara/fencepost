@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "project": {"type": "http", "url": "https://example.invalid/mcp", "headers": {"Authorization": "Bearer ${TOKEN}"}}
+  }
+}
