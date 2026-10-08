@@ -1,6 +1,6 @@
 # Fencepost
 
-Fencepost audits the MCP servers configured on a developer's machine. It checks tool and parameter descriptions for suspicious instructions, checks launch and connection settings, and records trusted tool definitions so later changes are visible. It runs as a single Go binary with no CGO dependency. This first stage includes `scan`, `pin`, and `verify`; policy enforcement through `proxy` comes in the next stage.
+Fencepost audits MCP servers and enforces tool-call policy between an AI agent and its servers. It checks descriptions and launch settings, pins trusted definitions, filters calls, redacts results, and records a hash-chained audit log. It runs as a single Go binary with no CGO dependency.
 
 ## 30-second quickstart
 
@@ -27,6 +27,61 @@ fencepost pin --config ./mcp.json --update filesystem/read_file
 Exit codes: **0** for success, **1** for findings at or above `--fail-on` (default `medium`) or lock drift, **2** for invalid input or an incomplete scan. JSON and SARIF include connection errors. A failed connection never counts as a clean scan.
 
 `pin` writes `fencepost.lock` in the working directory and refuses to overwrite an existing baseline. `verify` compares launch specs and tool definitions, with unified description diffs. `pin --update server/tool` approves just that tool's change, addition, or removal. It does not approve launch changes or unrelated tool drift. Review and deliberately replace the baseline to approve launch or server changes. Keep the lockfile under version control when its descriptions are suitable for sharing; remove the root ignore entry to do so.
+
+## Protect tool calls
+
+Create `fencepost.yaml` next to your project. Match the server/tool names and argument names to your server. This example allows reads under `workspace`, asks before writes, and denies everything else:
+
+```yaml
+version: 1
+session_budget: 100
+servers:
+  filesystem:
+    default: deny
+    tools:
+      - name: read_file
+        action: allow
+        rate_limit: 60
+        arguments:
+          - path: $.path
+            path_prefix: [./workspace]
+      - name: write_file
+        action: ask
+        arguments:
+          - path: $.path
+            path_prefix: [./workspace]
+output:
+  redact_secrets: true
+  max_bytes: 1048576
+  injection: warn
+```
+
+```sh
+fencepost policy check
+fencepost pin --config ./mcp.json
+fencepost wrap --config ./mcp.json           # review the diff
+fencepost wrap --config ./mcp.json --write   # writes a .fencepost.bak backup
+fencepost approve                          # open the private loopback URL it prints
+```
+
+Restart the MCP client after wrapping. The backup is the proxy's original-server configuration; keep it available and private. `fencepost unwrap --config ./mcp.json --write` restores the original bytes. Without `--write`, both commands only show a diff. JSONC comments are preserved in the backup; rewritten configs use formatted JSON.
+
+Manual proxy commands are also available:
+
+```sh
+fencepost proxy --server filesystem -- /path/to/mcp-server --server-option
+fencepost proxy --server remote --listen 127.0.0.1:8787 --upstream https://mcp.example.com/mcp
+```
+
+A denied call reaches the agent as a brief JSON-RPC error with its original ID:
+
+```json
+{"jsonrpc":"2.0","id":7,"error":{"code":-32001,"message":"Tool arguments are outside the permitted scope."}}
+```
+
+Changed pinned tools are hidden until reviewed and updated using the original config, for example `fencepost pin --config ./mcp.json.fencepost.bak --update filesystem/read_file`. Refresh the client's tool list afterward. Approval timeouts deny, and upstream crashes are not restarted automatically.
+
+Use `fencepost log tail`, `fencepost log verify`, and `fencepost log stats` to inspect the default `fencepost-audit.jsonl`. Keep its `.head` checkpoint alongside it. See [all policy fields and AgentWorkflows setup](docs/policy.md), [the threat model](docs/threat-model.md), and [example laptop, CI, and team policies](examples/). Filesystem and host checks constrain tool arguments; OS isolation is still needed to constrain a server's actual filesystem and network access.
 
 ## Sample offline scan
 
@@ -69,14 +124,24 @@ Use environment references such as `${TOKEN}` or `${env:TOKEN}` for credentials.
 
 ## Development
 
-Requirements: Go 1.27.2, GNU Make, a C compiler for Go's race detector, and Python 3 with `jsonschema==4.26.0` for validation against the official SARIF schema. Release builds use `CGO_ENABLED=0`; the race detector's compiler requirement is only for tests. The only application dependency is `gopkg.in/yaml.v3`, for YAML lockfiles and config source locations.
+Requirements: Go 1.27.2, GNU Make, a C compiler for Go's race detector, and Python 3 with `jsonschema==4.26.0` for SARIF and policy schema checks. Release builds use `CGO_ENABLED=0`; the race detector's compiler requirement is only for tests. Application dependencies are `gopkg.in/yaml.v3` for YAML/config locations and `golang.org/x/net/idna` (with `x/text`) for validated Unicode host normalization.
 
 ```sh
 python -m pip install jsonschema==4.26.0
 make lint test e2e build
 ```
 
-`lint` runs `go vet` and golangci-lint 2.14.0 with Staticcheck and unused-code checks. The linter is downloaded as an isolated Go tool; it is not an application dependency. `test` runs `go test -race ./...`. `e2e` builds the CLI and six Go fixture servers, exercises scan/pin/verify over both transports and protocol revisions, and validates SARIF against its full JSON Schema. `build` produces linux/darwin/windows binaries for amd64 and arm64 in `bin/`.
+`lint` runs `go vet` and golangci-lint 2.14.0 with Staticcheck and unused-code checks. The linter is downloaded as an isolated Go tool; it is not an application dependency. `test` runs `go test -race ./...`. `e2e` builds the CLI and ten Go fixture servers with `-race`, exercises scanning, pinning, proxy enforcement, and wrapping over both transports, and validates SARIF and example policy schemas. `build` produces linux/darwin/windows binaries for amd64 and arm64 in `bin/`.
+
+Run bounded fuzzing locally (CI runs seeds only) and benchmark the call path:
+
+```sh
+go test ./internal/mcp -run '^$' -fuzz FuzzFraming -fuzztime=10s
+go test ./internal/policy -run '^$' -fuzz FuzzMatcher -fuzztime=10s
+go test ./internal/proxy -run '^$' -bench BenchmarkSmallCall -benchmem
+```
+
+Measured latency and scope are recorded in [docs/PERF.md](docs/PERF.md).
 
 Regenerate the rule reference with `go generate ./internal/scan`. Tests check that it matches the rule registry. Verbatim descriptions captured from official reference servers, with source hashes and upstream licensing notices, are in `testdata/reference/`.
 

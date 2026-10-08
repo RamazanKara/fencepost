@@ -1,0 +1,38 @@
+version: 1
+session_budget: 200
+servers:
+  filesystem:
+    default: deny
+    tools:
+      - name: read_*
+        action: allow
+        rate_limit: 120
+        arguments:
+          - path: $.path
+            path_prefix: [../workspace]
+      - name: write_file
+        action: ask
+        arguments:
+          - path: $.path
+            path_prefix: [../workspace]
+          - path: $.content
+            max_length: 100000
+  fetch:
+    default: deny
+    tools:
+      - name: fetch
+        action: allow
+        rate_limit: 20
+        arguments:
+          - path: $.url
+            host: [docs.python.org, go.dev]
+output:
+  redact_secrets: true
+  max_bytes: 1048576
+  injection: warn
+approval:
+  mode: local
+  timeout: 30s
+  local_file: ../fencepost-approval.json
+audit:
+  path: ../fencepost-audit.jsonl

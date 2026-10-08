@@ -1,0 +1,30 @@
+version: 1
+session_budget: 100
+servers:
+  deployments:
+    default: deny
+    tools:
+      - name: status
+        action: allow
+        rate_limit: 30
+      - name: deploy
+        action: ask
+        rate_limit: 5
+        arguments:
+          - path: $.environment
+            enum: [staging, production]
+          - path: $.revision
+            regex: '^[a-f0-9]{40}$'
+            max_length: 40
+output:
+  redact_secrets: true
+  max_bytes: 524288
+  injection: block
+approval:
+  mode: webhook
+  timeout: 45s
+  webhook_url: https://approvals.example.com/fencepost
+  hmac_secret_env: FENCEPOST_APPROVAL_HMAC
+audit:
+  path: ../team-audit.jsonl
+  otlp_endpoint: https://telemetry.example.com/v1/traces

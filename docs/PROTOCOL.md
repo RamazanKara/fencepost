@@ -34,7 +34,15 @@ Legacy HTTP initialization captures `Mcp-Session-Id`; subsequent requests carry 
 
 Each server has a 15-second total deadline. The stdio process receives a small environment allowlist (`PATH`, home/profile directories, Windows system/application directories, command interpreter, executable suffixes, and temporary directories), plus its declared environment. Other parent variables, including tokens, are not inherited. Explicit environment references can resolve parent variables. A clean environment is not an operating-system sandbox: a launched server still runs with the caller's filesystem and network permissions. Online scans execute configured launch commands, which can install packages. Offline scans do not start processes or make network requests.
 
-This release is a scanner and pinning client. It does not call tools, retrieve prompt bodies or resource contents, handle OAuth/browser login, run interactive config inputs, execute env/header helpers, load `envFile`, support the deprecated separate HTTP+SSE transport, or implement the proxy from prompt 2. Tool invocation features such as `x-mcp-header` parameter mirroring and MRTR continuations are outside the scanner's implemented subset. It preserves these fields when reading definitions. Schema references are not fetched.
+The scanner and pinning client do not call tools, retrieve prompt bodies or resource contents, handle OAuth/browser login, run interactive config inputs, execute env/header helpers, load `envFile`, or support the deprecated separate HTTP+SSE transport. Tool invocation features such as `x-mcp-header` parameter mirroring and MRTR continuations are outside the scanner's implemented subset. It preserves these fields when reading definitions. Schema references are not fetched.
+
+## Policy proxy
+
+The 0.2 proxy relays client-negotiated protocol traffic; it does not negotiate a separate MCP revision or advertise capabilities on the client's behalf. Stdio is bidirectional and preserves request IDs, notifications, progress, cancellation, and server-initiated sampling/elicitation/roots requests. Tool calls awaiting approval do not stop the input reader. Upstream disconnects produce explicit errors for outstanding client requests, and automatic restart is disabled.
+
+The loopback HTTP proxy accepts POST, GET, and DELETE, forwarding session IDs, protocol headers, Last-Event-ID, and JSON/SSE responses. SSE comments, retry values, IDs, and multiline events survive transformation. It buffers at most one bounded event at a time; the client remains responsible for reconnecting/resuming streams. An HTTP entry rewritten by `wrap` uses a stdio-to-HTTP gateway; the gateway opens the optional GET channel for a legacy session. Unknown session IDs, redirects, and browser Origin headers are rejected.
+
+Policies operate on `tools/call` arguments and tool results. Pinned `tools/list` entries are checked with the existing hash format, including paginated lists. A tool-list change notification revokes cached trust. Other methods and unknown extension fields pass through; this is not a protocol-method allowlist. The proxy does not synthesize header-mirrored arguments, OAuth flows, or modern MRTR orchestration; callers must supply protocol features they require. See [policy behavior](policy.md) and [trust boundaries](threat-model.md).
 
 ## Lock format
 

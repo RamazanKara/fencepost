@@ -24,10 +24,14 @@ func main() {
 
 func run(ctx context.Context, args []string, out, errOut io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(out, "Usage: fencepost <scan|pin|verify> [options]\n\nscan    Audit configured MCP servers (--offline, --format table|json|sarif, --fail-on low|medium|high|critical)\npin     Record trusted definitions in fencepost.lock (--update server/tool)\nverify  Reconnect and detect lockfile drift\n\nAll commands accept --config file; otherwise discover installed client configs.")
+		fmt.Fprintln(out, "Usage: fencepost <scan|pin|verify|proxy|wrap|unwrap|policy|approve|log> [options]\n\nscan    Audit configured MCP servers (--offline, --format table|json|sarif, --fail-on low|medium|high|critical)\npin     Record trusted definitions in fencepost.lock (--update server/tool)\nverify  Reconnect and detect lockfile drift\nproxy   Enforce policy over stdio or Streamable HTTP\nwrap    Preview client config changes; --write applies with a backup\nunwrap  Preview restoring backups; --write applies\npolicy check  Validate fencepost.yaml\napprove Open a local approval channel and print its private URL\nlog tail|verify|stats  Inspect the audit log\n\nUse <command> --help for options.")
 		return 0
 	}
 	command := args[0]
+	switch command {
+	case "proxy", "wrap", "unwrap", "policy", "approve", "log":
+		return runProxyCommands(ctx, args, out, errOut)
+	}
 	if command != "scan" && command != "pin" && command != "verify" {
 		fmt.Fprintln(errOut, "Unknown command; use fencepost --help.")
 		return 2

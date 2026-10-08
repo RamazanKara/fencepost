@@ -17,6 +17,4 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install jsonschema==4.26.0
-      - run: make lint
-      - run: make test e2e
-      - run: make build
+      - run: make lint test e2e build

@@ -1,0 +1,22 @@
+version: 1
+session_budget: 50
+servers:
+  filesystem:
+    default: deny
+    tools:
+      - name: read_file
+        action: allow
+        rate_limit: 60
+        arguments:
+          - path: $.path
+            path_prefix: [../workspace]
+  fetch:
+    default: deny
+  shell:
+    default: deny
+output:
+  redact_secrets: true
+  max_bytes: 262144
+  injection: block
+audit:
+  path: ../ci-audit.jsonl

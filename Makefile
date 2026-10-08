@@ -8,7 +8,7 @@ test:
 	go test -race ./...
 
 e2e:
-	go test -race -tags=e2e ./cmd/fencepost ./internal/report
+	go test -race -tags=e2e ./cmd/fencepost ./internal/report ./internal/policy
 
 build:
 	go run scripts/build.go

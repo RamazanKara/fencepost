@@ -27,7 +27,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	programs = map[string]string{}
-	for _, name := range []string{"fencepost", "clean", "poisoned", "shadow-a", "shadow-b", "rugpull", "http"} {
+	for _, name := range []string{"fencepost", "clean", "poisoned", "shadow-a", "shadow-b", "rugpull", "http", "filesystem", "fetch", "leaky", "injecting"} {
 		path := filepath.Join(dir, name)
 		if runtime.GOOS == "windows" {
 			path += ".exe"
@@ -36,7 +36,7 @@ func TestMain(m *testing.M) {
 		if name == "fencepost" {
 			pkg = "./cmd/fencepost"
 		}
-		cmd := exec.Command("go", "build", "-o", path, pkg)
+		cmd := exec.Command("go", "build", "-race", "-o", path, pkg)
 		cmd.Dir = "../.."
 		if out, err := cmd.CombinedOutput(); err != nil {
 			fmt.Fprintf(os.Stderr, "build %s: %v\n%s", name, err, out)

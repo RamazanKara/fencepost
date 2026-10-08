@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/RamazanKara/fencepost/schema/policy.schema.json",
+  "title": "Fencepost policy version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "servers"],
+  "properties": {
+    "version": {"const": 1},
+    "servers": {
+      "type": "object", "minProperties": 1, "propertyNames": {"minLength": 1},
+      "additionalProperties": {"$ref": "#/$defs/server"}
+    },
+    "session_budget": {"type": "integer", "minimum": 0, "default": 0},
+    "output": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "redact_secrets": {"type": "boolean", "default": true},
+        "max_bytes": {"type": "integer", "minimum": 512, "maximum": 16777216, "default": 1048576},
+        "injection": {"enum": ["warn", "block"], "default": "warn"}
+      }
+    },
+    "approval": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "mode": {"enum": ["local", "webhook"], "default": "local"},
+        "timeout": {"type": "string", "minLength": 1, "default": "30s"},
+        "local_file": {"type": "string", "minLength": 1, "default": "fencepost-approval.json"},
+        "webhook_url": {"type": "string", "format": "uri"},
+        "hmac_secret_env": {"type": "string", "minLength": 1}
+      },
+      "allOf": [{"if": {"required": ["mode"], "properties": {"mode": {"const": "webhook"}}}, "then": {"required": ["webhook_url", "hmac_secret_env"]}}]
+    },
+    "audit": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "default": "fencepost-audit.jsonl"},
+        "otlp_endpoint": {"type": "string", "format": "uri"}
+      }
+    }
+  },
+  "$defs": {
+    "action": {"enum": ["allow", "deny", "ask"]},
+    "server": {
+      "type": "object", "additionalProperties": false, "required": ["default"],
+      "properties": {
+        "default": {"$ref": "#/$defs/action"},
+        "tools": {"type": "array", "items": {"$ref": "#/$defs/tool"}}
+      }
+    },
+    "tool": {
+      "type": "object", "additionalProperties": false, "required": ["name", "action"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "action": {"$ref": "#/$defs/action"},
+        "rate_limit": {"type": "integer", "minimum": 0, "default": 0},
+        "arguments": {"type": "array", "items": {"$ref": "#/$defs/argument"}}
+      }
+    },
+    "argument": {
+      "type": "object", "additionalProperties": false, "required": ["path"],
+      "anyOf": [{"required": ["path_prefix"]}, {"required": ["host"]}, {"required": ["regex"]}, {"required": ["max_length"]}, {"required": ["enum"]}],
+      "properties": {
+        "path": {"type": "string", "pattern": "^\\$(?:\\.[A-Za-z_][A-Za-z0-9_-]*|\\[(?:[0-9]+|\\*)\\])+$"},
+        "path_prefix": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "host": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "regex": {"type": "string", "minLength": 1},
+        "max_length": {"type": "integer", "minimum": 0},
+        "enum": {"type": "array", "minItems": 1}
+      }
+    }
+  }
+}
