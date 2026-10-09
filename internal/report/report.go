@@ -13,6 +13,7 @@ import (
 
 	"github.com/RamazanKara/fencepost/internal/clientconfig"
 	"github.com/RamazanKara/fencepost/internal/scan"
+	"github.com/RamazanKara/fencepost/internal/version"
 )
 
 func Safe(text string, servers []clientconfig.Server) string {
@@ -148,7 +149,7 @@ func SARIF(w io.Writer, result scan.Result) error {
 	for _, e := range result.Errors {
 		notifications = append(notifications, map[string]any{"level": "error", "message": map[string]string{"text": e.Server + ": " + e.Message}})
 	}
-	document := map[string]any{"$schema": "https://json.schemastore.org/sarif-2.1.0.json", "version": "2.1.0", "runs": []any{map[string]any{"tool": map[string]any{"driver": map[string]any{"name": "fencepost", "version": "0.1.0", "informationUri": "https://github.com/RamazanKara/fencepost", "rules": rules}}, "results": results, "invocations": []any{map[string]any{"executionSuccessful": len(result.Errors) == 0, "toolExecutionNotifications": notifications}}}}}
+	document := map[string]any{"$schema": "https://json.schemastore.org/sarif-2.1.0.json", "version": "2.1.0", "runs": []any{map[string]any{"tool": map[string]any{"driver": map[string]any{"name": "fencepost", "version": version.Version, "informationUri": "https://github.com/RamazanKara/fencepost", "rules": rules}}, "results": results, "invocations": []any{map[string]any{"executionSuccessful": len(result.Errors) == 0, "toolExecutionNotifications": notifications}}}}}
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	encoder.SetEscapeHTML(false)

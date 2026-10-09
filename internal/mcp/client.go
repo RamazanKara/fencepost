@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/RamazanKara/fencepost/internal/clientconfig"
+	"github.com/RamazanKara/fencepost/internal/version"
 )
 
 type Tool map[string]json.RawMessage
@@ -75,7 +76,7 @@ func (c *Client) Call(ctx context.Context, method string, params map[string]any)
 		}
 		meta["io.modelcontextprotocol/protocolVersion"] = Latest
 		meta["io.modelcontextprotocol/clientCapabilities"] = map[string]any{}
-		meta["io.modelcontextprotocol/clientInfo"] = map[string]string{"name": "fencepost", "version": "0.1.0"}
+		meta["io.modelcontextprotocol/clientInfo"] = map[string]string{"name": "fencepost", "version": version.Version}
 		copyParams["_meta"] = meta
 	}
 	m, err := Encode(map[string]any{"jsonrpc": "2.0", "id": c.next.Add(1), "method": method, "params": copyParams})
@@ -146,7 +147,7 @@ func (c *Client) negotiate(ctx context.Context) error {
 		c.stdio.legacy = true
 		c.stdio.mu.Unlock()
 	}
-	result, err = c.Call(ctx, "initialize", map[string]any{"protocolVersion": Previous, "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "fencepost", "version": "0.1.0"}})
+	result, err = c.Call(ctx, "initialize", map[string]any{"protocolVersion": Previous, "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "fencepost", "version": version.Version}})
 	if err != nil {
 		return fmt.Errorf("initialize: %w", err)
 	}

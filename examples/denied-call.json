@@ -1,0 +1,1 @@
+{"server":"filesystem","name":"delete_file","arguments":{"path":"private.txt"}}

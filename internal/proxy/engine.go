@@ -37,6 +37,7 @@ type Engine struct {
 	generation                      int
 	used                            int
 	rates                           map[string][]time.Time
+	rateSweep                       time.Time
 	always                          map[string]bool
 }
 
@@ -209,6 +210,14 @@ func (e *Engine) Check(r *Request) (*mcp.Message, error) {
 	}
 	now := time.Now()
 	if reason == "" && rate > 0 {
+		if !now.Before(e.rateSweep) {
+			for tool, times := range e.rates {
+				if len(times) == 0 || !times[len(times)-1].After(now.Add(-time.Minute)) {
+					delete(e.rates, tool)
+				}
+			}
+			e.rateSweep = now.Add(time.Minute)
+		}
 		times := e.rates[r.tool]
 		i := 0
 		for i < len(times) && !times[i].After(now.Add(-time.Minute)) {
@@ -318,7 +327,11 @@ func (e *Engine) filterTools(m mcp.Message, generation int) (mcp.Message, error)
 	e.pinned = true
 	if generation == e.generation {
 		for name, valid := range trusted {
-			e.trusted[name] = valid
+			if valid {
+				e.trusted[name] = true
+			} else {
+				delete(e.trusted, name)
+			}
 		}
 	}
 	e.mu.Unlock()

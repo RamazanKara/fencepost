@@ -2,16 +2,24 @@
 
 Fencepost audits MCP servers and enforces tool-call policy between an AI agent and its servers. It checks descriptions and launch settings, pins trusted definitions, filters calls, redacts results, and records a hash-chained audit log. It runs as a single Go binary with no CGO dependency.
 
-## 30-second quickstart
+## 60-second quickstart
 
-With Go 1.27.2, from this checkout:
+Fencepost **0.1.0**. From this checkout with Go 1.27.2, run the first command once to build the CLI; compilation and dependency downloads are setup time and may exceed a minute. The following three CLI commands are the 60-second walkthrough: create a starter policy, validate it, and explain a denied call. No MCP server or credential is needed.
 
+<!-- quickstart -->
 ```sh
-CGO_ENABLED=0 go build -o bin/fencepost ./cmd/fencepost
-./bin/fencepost scan
+go build -o bin/ ./cmd/fencepost
+./bin/fencepost init
+./bin/fencepost policy check
+./bin/fencepost explain fencepost.yaml examples/denied-call.json
 ```
+<!-- /quickstart -->
 
-On PowerShell, set `$env:CGO_ENABLED='0'`, build to `bin/fencepost.exe`, and run `.\bin\fencepost.exe scan`.
+On PowerShell, use `.\bin\fencepost.exe` for `./bin/fencepost`. The final command prints `DENY: no tool rule matched; using server default (default).` and exits **1**, as expected. `init` refuses to overwrite an existing file; start in a fresh checkout or use `init --policy starter.yaml`, `policy check --policy starter.yaml`, and `explain starter.yaml examples/denied-call.json`. The e2e suite executes this quickstart, including the documented build. The surrounding e2e suite and proxy fixture binaries use the race detector.
+
+The starter denies everything except `filesystem/read_file` with an absolute path under `workspace` beside the policy. Create that directory and review server/tool names before using the proxy. `init --server NAME --policy FILE` needs no interactive input.
+
+Run `fencepost doctor --config ./mcp.json` to check discovery, policy, and file permissions without starting servers. See [policy explanations and diagnostics](docs/policy.md#operator-commands).
 
 `scan` discovers Claude Desktop, Claude Code, Cursor, VS Code, and Windsurf configs in your home directory and current project. Online scans start configured commands, which may install packages, and enumerate server definitions. Use `fencepost scan --offline` to audit config without connecting. A clean environment limits inherited variables; it does not sandbox the server's filesystem or network access.
 
@@ -99,6 +107,19 @@ remote (testdata\home\.cursor\mcp.json)
 2 server(s), 3 finding(s), 0 connection error(s)
 ```
 
+## Scope
+
+| Fencepost does | Fencepost does not |
+| --- | --- |
+| Audit launch settings and advertised definitions | Prove server code is safe or attest its executable |
+| Match tool names and arguments, pins, rates, and budgets | Sandbox filesystem, network, processes, or credentials |
+| Require approval for configured calls | Share budgets across independent MCP sessions |
+| Redact recognized secrets and flag suspected injection | Detect every secret or make untrusted output safe |
+| Detect audit edits against a trusted checkpoint | Detect replacement of both log and checkpoint |
+| Relay stdio and Streamable HTTP | Implement OAuth or enforce policy on all protocol methods |
+
+Read the [threat model](docs/threat-model.md) before trusting a deployment.
+
 ## Rules
 
 | ID | Severity | Rule |
@@ -136,16 +157,20 @@ make lint test e2e build
 Run bounded fuzzing locally (CI runs seeds only) and benchmark the call path:
 
 ```sh
-go test ./internal/mcp -run '^$' -fuzz FuzzFraming -fuzztime=10s
-go test ./internal/policy -run '^$' -fuzz FuzzMatcher -fuzztime=10s
+go test ./internal/mcp -run '^$' -fuzz FuzzFraming -fuzztime=60s
+go test ./internal/policy -run '^$' -fuzz FuzzMatcher -fuzztime=60s
 go test ./internal/proxy -run '^$' -bench BenchmarkSmallCall -benchmem
 ```
 
-Measured latency and scope are recorded in [docs/PERF.md](docs/PERF.md).
+Property tests exercise policy ordering/constraints and audit-chain tampering. The opt-in soak runs with `go test -race -tags=soak ./internal/proxy -run TestSoak10Minutes -count=1 -timeout=15m -v`.
+
+Measured latency, soak results, and scope are recorded in [docs/PERF.md](docs/PERF.md).
 
 Regenerate the rule reference with `go generate ./internal/scan`. Tests check that it matches the rule registry. Verbatim descriptions captured from official reference servers, with source hashes and upstream licensing notices, are in `testdata/reference/`.
 
 The CI workflow runs lint, tests, end-to-end checks, and cross-builds in one Ubuntu job on pushes to `main` or manual dispatch. No publishing or release automation is included.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the [local release procedure](docs/RELEASING.md). `make release` builds six binaries, checksums, and a local container image; Docker is required.
 
 ## License
 

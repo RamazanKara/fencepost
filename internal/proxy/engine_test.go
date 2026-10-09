@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -385,5 +386,45 @@ func TestOutputPreservesNumbersAndInvalidArgumentsAudit(t *testing.T) {
 	stats, err := audit.Statistics(e.Policy.Audit.Path)
 	if err != nil || stats.Calls["s/echo"] != 2 || stats.Denies != 1 {
 		t.Fatal(stats, err)
+	}
+}
+
+func TestExpiredRateBuckets(t *testing.T) {
+	e := engine(t, "")
+	server := e.Policy.Servers["s"]
+	server.Tools = []policy.Tool{{Name: "*", Action: "allow", RateLimit: 1}}
+	e.Policy.Servers["s"] = server
+	for i := range 2000 {
+		e.rates[fmt.Sprint(i)] = []time.Time{time.Now().Add(-2 * time.Minute)}
+	}
+	e.rates["active"] = []time.Time{time.Now()}
+	r, denied := call(t, e, 1, "fresh")
+	if denied != nil {
+		t.Fatal("fresh tool denied")
+	}
+	e.finish(r)
+	if len(e.rates) != 2 || len(e.rates["active"]) != 1 {
+		t.Fatalf("rate buckets retained: %d", len(e.rates))
+	}
+	_, denied = call(t, e, 2, "active")
+	if denied == nil {
+		t.Fatal("cleanup bypassed active rate limit")
+	}
+}
+
+func TestRejectedToolNamesAreNotRetained(t *testing.T) {
+	e := engine(t, "")
+	if err := pin.Write(e.lockPath, pin.Lock{Version: 1, Servers: map[string]pin.Server{}}); err != nil {
+		t.Fatal(err)
+	}
+	e.trusted["untrusted_0"] = true
+	for i := range 100 {
+		m := message(t, fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"untrusted_%d","inputSchema":{"type":"object"}}]}}`, i))
+		if _, err := e.filterTools(m, e.generation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(e.trusted) != 0 {
+		t.Fatalf("untrusted names retained: %d", len(e.trusted))
 	}
 }

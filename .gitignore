@@ -3,3 +3,4 @@
 /.tools/
 /fencepost.lock
 *.test
+/dist/

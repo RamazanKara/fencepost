@@ -38,7 +38,7 @@ The scanner and pinning client do not call tools, retrieve prompt bodies or reso
 
 ## Policy proxy
 
-The 0.2 proxy relays client-negotiated protocol traffic; it does not negotiate a separate MCP revision or advertise capabilities on the client's behalf. Stdio is bidirectional and preserves request IDs, notifications, progress, cancellation, and server-initiated sampling/elicitation/roots requests. Tool calls awaiting approval do not stop the input reader. Upstream disconnects produce explicit errors for outstanding client requests, and automatic restart is disabled.
+The 0.1.0 proxy relays client-negotiated protocol traffic; it does not negotiate a separate MCP revision or advertise capabilities on the client's behalf. Stdio is bidirectional and preserves request IDs, notifications, progress, cancellation, and server-initiated sampling/elicitation/roots requests. Tool calls awaiting approval do not stop the input reader. Upstream disconnects produce explicit errors for outstanding client requests, and automatic restart is disabled.
 
 The loopback HTTP proxy accepts POST, GET, and DELETE, forwarding session IDs, protocol headers, Last-Event-ID, and JSON/SSE responses. SSE comments, retry values, IDs, and multiline events survive transformation. It buffers at most one bounded event at a time; the client remains responsible for reconnecting/resuming streams. An HTTP entry rewritten by `wrap` uses a stdio-to-HTTP gateway; the gateway opens the optional GET channel for a legacy session. Unknown session IDs, redirects, and browser Origin headers are rejected.
 

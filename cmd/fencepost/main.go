@@ -14,6 +14,7 @@ import (
 	"github.com/RamazanKara/fencepost/internal/pin"
 	"github.com/RamazanKara/fencepost/internal/report"
 	"github.com/RamazanKara/fencepost/internal/scan"
+	"github.com/RamazanKara/fencepost/internal/version"
 )
 
 func main() {
@@ -24,11 +25,20 @@ func main() {
 
 func run(ctx context.Context, args []string, out, errOut io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(out, "Usage: fencepost <scan|pin|verify|proxy|wrap|unwrap|policy|approve|log> [options]\n\nscan    Audit configured MCP servers (--offline, --format table|json|sarif, --fail-on low|medium|high|critical)\npin     Record trusted definitions in fencepost.lock (--update server/tool)\nverify  Reconnect and detect lockfile drift\nproxy   Enforce policy over stdio or Streamable HTTP\nwrap    Preview client config changes; --write applies with a backup\nunwrap  Preview restoring backups; --write applies\npolicy check  Validate fencepost.yaml\napprove Open a local approval channel and print its private URL\nlog tail|verify|stats  Inspect the audit log\n\nUse <command> --help for options.")
+		fmt.Fprintln(out, "Usage: fencepost <scan|pin|verify|proxy|wrap|unwrap|policy|approve|log|init|explain|doctor|version> [options]\n\nscan    Audit configured MCP servers (--offline, --format table|json|sarif, --fail-on low|medium|high|critical)\npin     Record trusted definitions in fencepost.lock (--update server/tool)\nverify  Reconnect and detect lockfile drift\nproxy   Enforce policy over stdio or Streamable HTTP\nwrap    Preview client config changes; --write applies with a backup\nunwrap  Preview restoring backups; --write applies\npolicy check  Validate fencepost.yaml\napprove Open a local approval channel and print its private URL\nlog tail|verify|stats  Inspect the audit log\n\ninit    Write a starter policy without prompts\nexplain Evaluate a tool-call JSON against a policy\ndoctor  Check config discovery and permissions\nversion Show version, commit, and build date\n\nUse <command> --help for options.")
 		return 0
 	}
 	command := args[0]
 	switch command {
+	case "version", "--version":
+		if len(args) != 1 {
+			fmt.Fprintln(errOut, "version takes no arguments")
+			return 2
+		}
+		fmt.Fprintf(out, "fencepost %s (commit %s, built %s)\n", version.Version, version.Commit, version.Date)
+		return 0
+	case "init", "explain", "doctor":
+		return runOperatorCommands(args, out, errOut)
 	case "proxy", "wrap", "unwrap", "policy", "approve", "log":
 		return runProxyCommands(ctx, args, out, errOut)
 	}

@@ -1,4 +1,4 @@
-.PHONY: lint test e2e build
+.PHONY: lint test e2e build release
 
 lint:
 	go vet ./...
@@ -12,3 +12,6 @@ e2e:
 
 build:
 	go run scripts/build.go
+
+release:
+	go run scripts/build.go release

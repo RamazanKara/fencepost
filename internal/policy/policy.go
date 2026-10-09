@@ -3,13 +3,13 @@ package policy
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -69,20 +69,28 @@ type Audit struct {
 func Read(filename string) (*Policy, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
-		return nil, errors.New("cannot read policy")
+		return nil, fmt.Errorf("%s: cannot read policy: %w", filename, err)
 	}
 	base, err := filepath.Abs(filepath.Dir(filename))
 	if err != nil {
 		return nil, err
 	}
-	return Parse(data, base)
+	p, err := Parse(data, base)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", filename, err)
+	}
+	return p, nil
 }
 
 func Parse(data []byte, base string) (*Policy, error) {
 	var document yaml.Node
-	if yaml.Unmarshal(data, &document) != nil || !validNodes(&document, false) {
-		return nil, errors.New("invalid policy YAML; null is only allowed inside enum values")
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return nil, yamlError(err, "invalid policy YAML")
 	}
+	if n := invalidNode(&document, false); n != nil {
+		return nil, fmt.Errorf("line %d: null is only allowed inside enum values", n.Line)
+	}
+	at := func(message string, fields ...string) error { return policyError(&document, message, fields...) }
 	p := &Policy{
 		Output:   Output{true, 1 << 20, "warn"},
 		Approval: Approval{Mode: "local", Timeout: "30s", LocalFile: "fencepost-approval.json"},
@@ -91,63 +99,84 @@ func Parse(data []byte, base string) (*Policy, error) {
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(p); err != nil {
-		return nil, errors.New("invalid policy YAML or unknown field")
+		return nil, yamlError(err, "invalid policy type, duplicate key, or unknown field")
 	}
 	var extra any
 	if decoder.Decode(&extra) != io.EOF {
-		return nil, errors.New("policy must contain one YAML document")
+		return nil, at("policy must contain one YAML document")
 	}
-	if p.Version != 1 || len(p.Servers) == 0 || p.SessionBudget < 0 {
-		return nil, errors.New("policy requires version 1, servers, and a nonnegative session_budget")
+	if p.Version != 1 {
+		return nil, at("version must be 1", "version")
 	}
-	if p.Output.MaxBytes < 512 || p.Output.MaxBytes > 16<<20 || (p.Output.Injection != "warn" && p.Output.Injection != "block") {
-		return nil, errors.New("output requires max_bytes between 512 and 16777216 and injection warn or block")
+	if len(p.Servers) == 0 {
+		return nil, at("servers must be nonempty", "servers")
+	}
+	if p.SessionBudget < 0 {
+		return nil, at("session_budget must be nonnegative", "session_budget")
+	}
+	if p.Output.MaxBytes < 512 || p.Output.MaxBytes > 16<<20 {
+		return nil, at("max_bytes must be between 512 and 16777216", "output", "max_bytes")
+	}
+	if p.Output.Injection != "warn" && p.Output.Injection != "block" {
+		return nil, at("injection must be warn or block", "output", "injection")
 	}
 	if p.Approval.Mode != "local" && p.Approval.Mode != "webhook" {
-		return nil, errors.New("approval mode must be local or webhook")
+		return nil, at("approval mode must be local or webhook", "approval", "mode")
 	}
 	duration, err := time.ParseDuration(p.Approval.Timeout)
 	if err != nil || duration <= 0 || duration > 10*time.Minute {
-		return nil, errors.New("approval timeout must be positive and at most 10m")
+		return nil, at("approval timeout must be positive and at most 10m", "approval", "timeout")
 	}
 	if p.Approval.Mode == "webhook" && (p.Approval.HMACSecretEnv == "" || !SafeEndpoint(p.Approval.WebhookURL)) {
-		return nil, errors.New("webhook requires an HTTPS URL (HTTP only on loopback) and hmac_secret_env")
+		return nil, at("webhook requires an HTTPS URL (HTTP only on loopback) and hmac_secret_env", "approval", "webhook_url")
 	}
-	if p.Approval.LocalFile == "" || p.Audit.Path == "" || (p.Audit.OTLPEndpoint != "" && !SafeEndpoint(p.Audit.OTLPEndpoint)) {
-		return nil, errors.New("invalid approval file, audit path, or OTLP endpoint")
+	if p.Approval.LocalFile == "" {
+		return nil, at("local_file must not be empty", "approval", "local_file")
+	}
+	if p.Audit.Path == "" {
+		return nil, at("audit path must not be empty", "audit", "path")
+	}
+	if p.Audit.OTLPEndpoint != "" && !SafeEndpoint(p.Audit.OTLPEndpoint) {
+		return nil, at("OTLP endpoint requires HTTPS or literal loopback HTTP", "audit", "otlp_endpoint")
 	}
 	p.Approval.LocalFile = absolute(base, p.Approval.LocalFile)
 	p.Audit.Path = absolute(base, p.Audit.Path)
 	for name, server := range p.Servers {
 		if name == "" || !action(server.Default) {
-			return nil, errors.New("each server requires a name and default allow, deny, or ask")
+			return nil, at("each server requires a name and default allow, deny, or ask", "servers", name, "default")
 		}
 		for i := range server.Tools {
 			t := &server.Tools[i]
-			if _, err := path.Match(t.Name, ""); err != nil || t.Name == "" || !action(t.Action) || t.RateLimit < 0 {
-				return nil, errors.New("invalid tool glob, action, or rate_limit")
+			if _, err := path.Match(t.Name, ""); err != nil || t.Name == "" {
+				return nil, at("invalid tool name glob", "servers", name, "tools", strconv.Itoa(i), "name")
+			}
+			if !action(t.Action) {
+				return nil, at("action must be allow, deny, or ask", "servers", name, "tools", strconv.Itoa(i), "action")
+			}
+			if t.RateLimit < 0 {
+				return nil, at("rate_limit must be nonnegative", "servers", name, "tools", strconv.Itoa(i), "rate_limit")
 			}
 			for j := range t.Arguments {
 				a := &t.Arguments[j]
 				a.parts, err = parsePath(a.Path)
 				if err != nil {
-					return nil, err
+					return nil, at(err.Error(), "servers", name, "tools", strconv.Itoa(i), "arguments", strconv.Itoa(j), "path")
 				}
 				if a.PathPrefix == nil && a.Host == nil && a.Regex == "" && a.MaxLength == nil && a.Enum == nil {
-					return nil, errors.New("argument rule requires a constraint")
+					return nil, at("argument rule requires a constraint", "servers", name, "tools", strconv.Itoa(i), "arguments", strconv.Itoa(j))
 				}
 				if (a.PathPrefix != nil && len(a.PathPrefix) == 0) || (a.Host != nil && len(a.Host) == 0) || (a.Enum != nil && len(a.Enum) == 0) || (a.MaxLength != nil && *a.MaxLength < 0) {
-					return nil, errors.New("argument allowlists must not be empty; max_length must be nonnegative")
+					return nil, at("argument allowlists must not be empty; max_length must be nonnegative", "servers", name, "tools", strconv.Itoa(i), "arguments", strconv.Itoa(j))
 				}
 				if a.Regex != "" {
 					a.pattern, err = regexp.Compile(a.Regex)
 					if err != nil {
-						return nil, errors.New("invalid argument regex")
+						return nil, at("invalid argument regex", "servers", name, "tools", strconv.Itoa(i), "arguments", strconv.Itoa(j), "regex")
 					}
 				}
 				for k, root := range a.PathPrefix {
 					if root == "" {
-						return nil, errors.New("empty path_prefix")
+						return nil, at("empty path_prefix", "servers", name, "tools", strconv.Itoa(i), "arguments", strconv.Itoa(j), "path_prefix", strconv.Itoa(k))
 					}
 					a.PathPrefix[k] = absolute(base, root)
 					if resolved, err := filepath.EvalSymlinks(a.PathPrefix[k]); err == nil {
@@ -157,14 +186,14 @@ func Parse(data []byte, base string) (*Policy, error) {
 				for k, host := range a.Host {
 					a.Host[k], err = canonicalHost(host)
 					if err != nil {
-						return nil, errors.New("invalid host allowlist entry; use an exact DNS name or canonical IP")
+						return nil, at("invalid host allowlist entry; use an exact DNS name or canonical IP", "servers", name, "tools", strconv.Itoa(i), "arguments", strconv.Itoa(j), "host", strconv.Itoa(k))
 					}
 				}
 				for k, value := range a.Enum {
 					// YAML numbers must have the same representation as JSON arguments.
 					raw, err := json.Marshal(value)
 					if err != nil {
-						return nil, errors.New("enum must contain JSON values")
+						return nil, at("enum must contain JSON values", "servers", name, "tools", strconv.Itoa(i), "arguments", strconv.Itoa(j), "enum")
 					}
 					d := json.NewDecoder(bytes.NewReader(raw))
 					d.UseNumber()
@@ -179,26 +208,59 @@ func Parse(data []byte, base string) (*Policy, error) {
 	return p, nil
 }
 
-func validNodes(n *yaml.Node, enum bool) bool {
+func invalidNode(n *yaml.Node, enum bool) *yaml.Node {
 	if n.Tag == "!!null" && !enum {
-		return false
+		return n
 	}
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i < len(n.Content); i += 2 {
 			value := n.Content[i+1]
 			allowed := enum || (n.Content[i].Value == "enum" && value.Kind == yaml.SequenceNode)
-			if !validNodes(value, allowed) {
-				return false
+			if bad := invalidNode(value, allowed); bad != nil {
+				return bad
 			}
 		}
-		return true
+		return nil
 	}
 	for _, child := range n.Content {
-		if !validNodes(child, enum) {
-			return false
+		if bad := invalidNode(child, enum); bad != nil {
+			return bad
 		}
 	}
-	return true
+	return nil
+}
+
+var yamlLine = regexp.MustCompile(`line ([0-9]+)`)
+
+func yamlError(err error, message string) error {
+	line := "1"
+	if match := yamlLine.FindStringSubmatch(err.Error()); match != nil {
+		line = match[1]
+	}
+	return fmt.Errorf("line %s: %s", line, message)
+}
+
+func policyError(n *yaml.Node, message string, fields ...string) error {
+	if n.Kind == yaml.DocumentNode && len(n.Content) > 0 {
+		n = n.Content[0]
+	}
+	for _, field := range fields {
+		next := n
+		if n.Kind == yaml.MappingNode {
+			for i := 0; i < len(n.Content); i += 2 {
+				if n.Content[i].Value == field {
+					next = n.Content[i+1]
+					break
+				}
+			}
+		} else if n.Kind == yaml.SequenceNode {
+			if i, err := strconv.Atoi(field); err == nil && i >= 0 && i < len(n.Content) {
+				next = n.Content[i]
+			}
+		}
+		n = next
+	}
+	return fmt.Errorf("line %d: %s", max(1, n.Line), message)
 }
 
 func absolute(base, name string) string {

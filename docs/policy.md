@@ -36,6 +36,22 @@ audit:
 
 All policy filesystem paths are relative to the policy file's directory. Environment interpolation is not performed in policies. Explicit `null` is only permitted within enum values. CLI `--lock` defaults to `fencepost.lock` in the working directory; wrapping writes an absolute lock path into the client config.
 
+## Operator commands
+
+```sh
+fencepost init --server filesystem --policy fencepost.yaml
+fencepost explain fencepost.yaml examples/denied-call.json
+fencepost doctor --config ./mcp.json --policy fencepost.yaml
+```
+
+`init` exclusively creates a mode-0600 starter file and never prompts or overwrites. The starter permits only `read_file` inside `./workspace`; create that directory beside the policy before use. All other tools and unknown servers deny.
+
+`explain` accepts one JSON object with `server`, `name`, and optional `arguments` (an object). It uses the same ordered matcher as the proxy and prints the deciding tool/argument index or server default. It exits 0 for allow, 1 for deny or required approval, and 2 for invalid input. It neither invokes a tool nor requests approval. Live rate/budget usage, pins, and approval state are not simulated.
+
+`doctor` lists discovery candidates, parses present configs and the policy, checks file access, and briefly creates/removes a temporary file in each runtime output directory. It never launches configured commands. Unix checks reject group/other-writable files and checked directories and require private config/runtime files to exclude group/other access. On Windows it checks effective read/create access and explicitly reports that ownership and other accounts' ACL access were not verified. No discovered servers, malformed files, or failed access checks return 2. Use `--config` to isolate discovery.
+
+Invalid policy diagnostics include the filename, line, and failed validation without copying policy values.
+
 ## Servers and tools
 
 | Field | Meaning |
@@ -143,9 +159,9 @@ fencepost unwrap --config ./mcp.json --write
 
 HTTP defaults to server name `upstream` when `--server` is omitted. It forwards JSON and SSE, sessions, Last-Event-ID, progress, cancellations, sampling, elicitation, and roots. GET streams and DELETE are forwarded. The client handles SSE reconnection. Redirects are refused; TLS uses the system trust store. The HTTP listener is loopback only and rejects browser Origin headers. It is intended for local MCP clients.
 
-`wrap` and `unwrap` show a full-file diff by default. `--write` applies it. All prompt-1 formats, including JSONC, nested/dotted VS Code settings, and matching Claude Code project entries, are supported. Unrelated settings are retained; rewritten JSON is indented and comments/trailing commas are removed. Disabled entries are left alone. Config backups at `<config>.fencepost.bak` preserve the original bytes and permissions are restricted when created. Existing backups are never overwritten. Restore removes the backup after restoring its exact contents. Review the diff if the config has changed since wrapping.
+`wrap` and `unwrap` show a full-file diff by default. `--write` applies it. All supported config formats, including JSONC, nested/dotted VS Code settings, and matching Claude Code project entries, are supported. Unrelated settings are retained; rewritten JSON is indented and comments/trailing commas are removed. Disabled entries are left alone. Config backups at `<config>.fencepost.bak` preserve the original bytes and permissions are restricted when created. Existing backups are never overwritten. Restore removes the backup after restoring its exact contents. Review the diff if the config has changed since wrapping.
 
-Wrapped commands select the original entry from the backup using `proxy --server NAME --config BACKUP`, with absolute policy and lock paths. HTTP entries use a stdio-to-HTTP gateway, including a legacy GET stream. Environment references used by remote headers are carried into the wrapper's declared environment. Keep the backup available; it is the proxy's launch source, not just an archive. Duplicate server names within one source are refused. Inputs/helpers/envFile remain unsupported as in prompt 1.
+Wrapped commands select the original entry from the backup using `proxy --server NAME --config BACKUP`, with absolute policy and lock paths. HTTP entries use a stdio-to-HTTP gateway, including a legacy GET stream. Environment references used by remote headers are carried into the wrapper's declared environment. Keep the backup available; it is the proxy's launch source, not just an archive. Duplicate server names within one source are refused. Inputs/helpers/envFile remain unsupported as described in the protocol reference.
 
 Direct stdio launches inherit the proxy's environment and working directory. Config-backed launches use the original declared environment plus the scanner's clean base environment and original cwd. A proxy process is not an OS sandbox.
 
