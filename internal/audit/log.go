@@ -18,15 +18,22 @@ import (
 )
 
 type Event struct {
-	Time       string         `json:"time"`
-	Session    string         `json:"session"`
-	Kind       string         `json:"kind"`
-	Server     string         `json:"server,omitempty"`
-	Tool       string         `json:"tool,omitempty"`
-	Method     string         `json:"method,omitempty"`
-	Decision   string         `json:"decision,omitempty"`
-	Rule       string         `json:"rule,omitempty"`
-	Redactions map[string]int `json:"redactions,omitempty"`
+	User       string          `json:"user,omitempty"`
+	Groups     []string        `json:"groups,omitempty"`
+	Client     string          `json:"client,omitempty"`
+	Approver   string          `json:"approver,omitempty"`
+	Reason     string          `json:"reason,omitempty"`
+	Arguments  json.RawMessage `json:"arguments,omitempty"`
+	Replayable bool            `json:"replayable,omitempty"`
+	Time       string          `json:"time"`
+	Session    string          `json:"session"`
+	Kind       string          `json:"kind"`
+	Server     string          `json:"server,omitempty"`
+	Tool       string          `json:"tool,omitempty"`
+	Method     string          `json:"method,omitempty"`
+	Decision   string          `json:"decision,omitempty"`
+	Rule       string          `json:"rule,omitempty"`
+	Redactions map[string]int  `json:"redactions,omitempty"`
 }
 
 type entry struct {
@@ -50,6 +57,7 @@ type Log struct {
 	file, checkpoint, guard *os.File
 	mu                      sync.Mutex
 	export                  *exporter
+	lines                   *lineExporter
 }
 
 func Open(path, endpoint string) (*Log, error) {
@@ -153,17 +161,24 @@ func (l *Log) Write(e Event) error {
 	if e.Time == "" {
 		e.Time = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-	for _, s := range []*string{&e.Server, &e.Tool, &e.Method, &e.Rule} {
+	for _, s := range []*string{&e.Server, &e.Tool, &e.Method, &e.Rule, &e.User, &e.Client, &e.Approver, &e.Reason} {
 		*s, _ = scan.RedactSecrets("", *s)
 		if len(*s) > 256 {
 			*s = "[oversized identifier]"
 		}
+	}
+	e.Groups = append([]string(nil), e.Groups...)
+	for i := range e.Groups {
+		e.Groups[i], _ = scan.RedactSecrets("", e.Groups[i])
 	}
 	data, _ := json.Marshal(entry{h.Sequence + 1, h.Hash, e})
 	sum := sha256.Sum256(data)
 	hash := hex.EncodeToString(sum[:])
 	line, _ := json.Marshal(Record{data, hash})
 	line = append(line, '\n')
+	if len(line) > 64<<10 {
+		return errors.New("audit entry exceeds limit")
+	}
 	n, err := l.file.Write(line)
 	if err != nil {
 		return err
@@ -174,6 +189,9 @@ func (l *Log) Write(e Event) error {
 	if l.export != nil && e.Kind == "decision" {
 		l.export.send(e)
 	}
+	if l.lines != nil {
+		l.lines.send(line)
+	}
 	return nil
 }
 
@@ -183,6 +201,9 @@ func (l *Log) Close() error {
 	err := errors.Join(l.file.Sync(), l.checkpoint.Sync(), l.file.Close(), l.checkpoint.Close(), l.guard.Close())
 	if l.export != nil {
 		err = errors.Join(err, l.export.close())
+	}
+	if l.lines != nil {
+		err = errors.Join(err, l.lines.close())
 	}
 	return err
 }

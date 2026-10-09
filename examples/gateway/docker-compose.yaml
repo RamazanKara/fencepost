@@ -1,0 +1,38 @@
+services:
+  gateway:
+    build:
+      context: ../..
+    image: fencepost:0.2.0
+    command: [gateway, --config, /config/gateway.yaml]
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ports: ["127.0.0.1:8787:8787"]
+    environment:
+      FENCEPOST_CI_KEY: ${FENCEPOST_CI_KEY:?Set a random CI key of at least 32 bytes}
+    volumes:
+      - ./gateway.yaml:/config/gateway.yaml:ro
+      - ./policy.yaml:/config/policy.yaml:ro
+      - audit:/data
+    tmpfs: [/tmp]
+  documents:
+    build:
+      context: ../..
+      dockerfile: examples/gateway/upstream.Dockerfile
+    network_mode: service:gateway
+    command: [--listen, "127.0.0.1:9001"]
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+  tickets:
+    build:
+      context: ../..
+      dockerfile: examples/gateway/upstream.Dockerfile
+    network_mode: service:gateway
+    command: [--listen, "127.0.0.1:9002"]
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+volumes:
+  audit:

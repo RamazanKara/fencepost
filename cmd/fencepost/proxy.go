@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/RamazanKara/fencepost/internal/approval"
 	"github.com/RamazanKara/fencepost/internal/audit"
@@ -24,6 +25,8 @@ func runProxyCommands(ctx context.Context, args []string, out, errOut io.Writer)
 	policyPath, lockPath, config, server, listen, upstream, logPath := "fencepost.yaml", "fencepost.lock", "", "", "", "", "fencepost-audit.jsonl"
 	write, n := false, 20
 	subcommand := ""
+	var filter audit.Filter
+	var from, until string
 	if command == "policy" || command == "log" {
 		if len(args) < 2 {
 			fmt.Fprintln(errOut, "A subcommand is required.")
@@ -51,6 +54,18 @@ func runProxyCommands(ctx context.Context, args []string, out, errOut io.Writer)
 	case "log":
 		flags.StringVar(&logPath, "file", logPath, "JSONL audit log")
 		flags.IntVar(&n, "n", 20, "tail line count")
+		if subcommand == "query" {
+			flags.StringVar(&filter.User, "user", "", "exact user")
+			flags.StringVar(&filter.Server, "server", "", "exact server")
+			flags.StringVar(&filter.Tool, "tool", "", "exact tool")
+			flags.StringVar(&filter.Decision, "decision", "", "exact decision")
+			flags.StringVar(&from, "from", "", "inclusive RFC3339 start")
+			flags.StringVar(&until, "until", "", "inclusive RFC3339 end")
+		}
+	case "policy":
+		if subcommand == "test" {
+			flags.StringVar(&logPath, "file", logPath, "recorded JSONL audit log")
+		}
 	}
 	if err := flags.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -64,6 +79,25 @@ func runProxyCommands(ctx context.Context, args []string, out, errOut io.Writer)
 	}
 	if command == "log" {
 		switch subcommand {
+		case "query":
+			for _, v := range []struct {
+				raw string
+				dst *time.Time
+			}{{from, &filter.From}, {until, &filter.Until}} {
+				if v.raw != "" {
+					parsed, err := time.Parse(time.RFC3339Nano, v.raw)
+					if err != nil {
+						return fail(errors.New("time filters require RFC3339"))
+					}
+					*v.dst = parsed
+				}
+			}
+			if !filter.From.IsZero() && !filter.Until.IsZero() && filter.From.After(filter.Until) {
+				return fail(errors.New("--from must not follow --until"))
+			}
+			if err := audit.Query(logPath, filter, out); err != nil {
+				return fail(err)
+			}
 		case "verify":
 			count, err := audit.Verify(logPath, nil)
 			if err != nil {
@@ -86,7 +120,7 @@ func runProxyCommands(ctx context.Context, args []string, out, errOut io.Writer)
 				return fail(err)
 			}
 		default:
-			return fail(errors.New("use log tail, verify, or stats"))
+			return fail(errors.New("use log tail, verify, stats, or query"))
 		}
 		return 0
 	}
@@ -134,8 +168,16 @@ func runProxyCommands(ctx context.Context, args []string, out, errOut io.Writer)
 		return fail(err)
 	}
 	if command == "policy" {
+		if subcommand == "test" {
+			count, err := audit.PolicyDiff(logPath, p, out)
+			if err != nil {
+				return fail(err)
+			}
+			fmt.Fprintf(errOut, "%d changed or unknown policy decisions. Rates, budgets, pins and approvals are not replayed.\n", count)
+			return 0
+		}
 		if subcommand != "check" {
-			return fail(errors.New("use policy check"))
+			return fail(errors.New("use policy check or test"))
 		}
 		fmt.Fprintln(out, "Policy is valid.")
 		return 0
@@ -189,7 +231,10 @@ func runProxyCommands(ctx context.Context, args []string, out, errOut io.Writer)
 	if (s.URL == "") == (s.Command == "") || (listen != "" && s.URL == "") {
 		return fail(errors.New("choose a command after -- or an HTTP --upstream"))
 	}
-	log, err := audit.Open(p.Audit.Path, p.Audit.OTLPEndpoint)
+	if p.Audit.Stdout && listen == "" {
+		return fail(errors.New("audit stdout is unavailable when stdout carries MCP frames"))
+	}
+	log, err := audit.OpenConfigured(p.Audit, out)
 	if err != nil {
 		return fail(err)
 	}

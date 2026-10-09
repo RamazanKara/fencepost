@@ -1,0 +1,25 @@
+listen: 0.0.0.0:8787
+public_url: https://fencepost.example.com
+policy:
+  source: policy.yaml
+auth:
+  api_keys:
+    - env: RESEARCH_MCP_TOKEN
+      user: research-worker
+      groups: [research-team]
+      client: agentworkflows
+    - env: SUPPORT_MCP_TOKEN
+      user: support-worker
+      groups: [support-team]
+      client: agentworkflows
+  issuer: https://id.example.com
+  browser_client_id: fencepost-inbox
+  client_names:
+    fencepost-inbox: approval-inbox
+approval:
+  groups: [tool-approvers]
+servers:
+  documents:
+    url: https://documents.example.com/mcp
+  tickets:
+    url: https://tickets.example.com/mcp

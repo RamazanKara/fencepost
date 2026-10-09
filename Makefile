@@ -1,4 +1,4 @@
-.PHONY: lint test e2e build release
+.PHONY: lint test e2e build release image
 
 lint:
 	go vet ./...
@@ -9,9 +9,13 @@ test:
 
 e2e:
 	go test -race -tags=e2e ./cmd/fencepost ./internal/report ./internal/policy
+	go test -tags=e2e ./deploy/helm
 
 build:
 	go run scripts/build.go
 
 release:
 	go run scripts/build.go release
+
+image:
+	docker build -t fencepost:0.2.0 .

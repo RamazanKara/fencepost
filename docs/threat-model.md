@@ -1,6 +1,6 @@
 # Threat model
 
-Fencepost sits between a local MCP client and a configured server. It assumes the client actually routes its MCP traffic through the proxy and that the policy, binary, lockfile, original config/backup, and approval channel are controlled by the operator. Tool arguments, server definitions, server results, and upstream error messages are untrusted.
+Fencepost sits between MCP clients and configured servers. It assumes the client actually routes its MCP traffic through the proxy and that the policy, binary, lockfile, original config/backup, and approval channel are controlled by the operator. Tool arguments, server definitions, server results, and upstream error messages are untrusted.
 
 ## What it enforces
 
@@ -8,7 +8,7 @@ Fencepost sits between a local MCP client and a configured server. It assumes th
 - Filesystem argument rules check resolved path containment and reject traversal, links outside the allowed root, encoded paths, and ambiguous Windows paths. URL argument rules parse the URL, validate IDNs, require exact host membership, and reject misleading userinfo and numeric IP representations.
 - A locked tool remains unavailable until the client lists a definition matching the baseline. List-change notifications revoke previous trust. This catches an advertised rug pull; the tool hash is not a code signature.
 - Output rules redact recognized secret patterns, replace oversized tool results, and visibly warn about detected prompt injection or block it. The original suspicious content stays visible after a warning unless a size cap also applies.
-- Every accepted protocol message and tool decision is audited without argument/result bodies. A checkpoint plus hash chain detects edited, missing, reordered, and truncated entries as long as the checkpoint is trusted.
+- Every accepted protocol message and tool decision is audited. Arguments are omitted unless sanitized recording is explicitly enabled for replay; results are never recorded. A checkpoint plus hash chain detects edited, missing, reordered, and truncated entries as long as the checkpoint is trusted.
 - Local approval uses a random URL token, loopback binding, Host/Origin checks, escaped text, and timeouts. Webhook decisions require request/response HMAC signatures. Missing approvals deny.
 
 ## What it does not enforce
@@ -23,7 +23,7 @@ FP001 and FP005 are heuristics. Obfuscated, encoded, fragmented, novel, or very 
 
 The baseline covers advertised tool definitions. A server can change implementation without changing the hash, or conceal drift until its next list response. The proxy does not poll tools on every call or attest the executable; scanner `verify` remains responsible for launch-spec drift. Protect and review lock updates.
 
-The HTTP proxy and approval service are for local use. Other processes running as the same user can usually read config, approval descriptors, and audit files or invoke servers directly. Windows uses the containing directory's ACLs; Unix uses restrictive file modes for newly created sensitive files. Local administrators are outside the boundary. This is not a multi-tenant authentication or authorization service.
+The standalone HTTP proxy and local approval service are for local use. Other processes running as the same user can usually read config, approval descriptors, and audit files or invoke servers directly. Windows uses the containing directory's ACLs; Unix uses restrictive file modes for newly created sensitive files. Local administrators are outside the boundary. Gateway mode adds issuer-validated user/group/client identity and isolated transport state; it does not isolate upstream processes at the OS level.
 
 Budgets and approvals last for one proxied MCP session. Starting another process or a new legacy HTTP session starts new counters. Modern stateless HTTP shares the listener's lifetime budget. Independent wrapped servers do not share an agent-conversation identity. No billing-grade or organization-wide accounting is claimed.
 
@@ -34,3 +34,16 @@ Protocol frames/SSE events, pending requests, HTTP sessions, and local approvals
 ## Operational assumptions
 
 Pin direct servers before wrapping. Keep policy and audit paths outside directories writable by an untrusted server where possible. Use least-privilege approval operators and a webhook receiver that validates freshness/nonces as well as signatures. Keep original backups private, because they may contain credentials. Review policy denies, injection warnings, and drift rather than automatically approving them. A passing scanner or proxy test is not a claim that an arbitrary MCP server is trustworthy.
+
+
+## Gateway trust boundary
+
+Deploy the gateway behind HTTPS on a trusted private backend, with Host preserved and direct upstream access restricted. Only configured issuers/JWKS and configured static keys establish identity. Client initialization names and forwarding headers cannot grant identity. Issuers must control group claims; access tokens require the exact per-server audience and expiry. User tokens are never forwarded upstream. Static keys identify service users, and key/issuer configuration changes require restart.
+
+Browser approval uses PKCE, state bound to a browser cookie, single-use callbacks, issuer-response validation, CSRF checks and configured approver groups. Approval reasons and identity are audited; group members can approve other users' calls. Notifications expose sanitized pending arguments to the configured chat bridge. Redaction is heuristic.
+
+Central policy refreshes atomically replace validated policy. Fetch, signature or parse failures retain the last known good policy, so an outage can delay revocation. Ed25519 authenticates the bytes but does not prevent rollback to an older signed document. Secure signing keys and the publisher. Runtime audit destinations are fixed until restart.
+
+Gateway budgets and approvals remain local to identity/server transport sessions. They are not shared across replicas or restarts; token/group changes can create new transport state. The Helm chart requires one replica. Stdio processes run with the gateway's OS privileges and are not a tenant sandbox. Deploy separate gateways/containers when teams require OS isolation.
+
+Audit exports are bounded and best effort; the local chain/checkpoint remain authoritative. Rotated export files have no separate checkpoints. Opt-in argument recording may retain sensitive information the redactor misses; replay reports unknown where arguments are unavailable or altered. Restrict log access and retention. TLS syslog is preferable outside a trusted network.

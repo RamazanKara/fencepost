@@ -28,6 +28,9 @@ type Request struct {
 	Server    string          `json:"server"`
 	Tool      string          `json:"tool"`
 	Arguments json.RawMessage `json:"arguments"`
+	User      string          `json:"user,omitempty"`
+	Groups    []string        `json:"groups,omitempty"`
+	Client    string          `json:"client,omitempty"`
 }
 
 type Response struct {

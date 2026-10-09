@@ -35,7 +35,14 @@
       "type": "object", "additionalProperties": false,
       "properties": {
         "path": {"type": "string", "minLength": 1, "default": "fencepost-audit.jsonl"},
-        "otlp_endpoint": {"type": "string", "format": "uri"}
+        "otlp_endpoint": {"type": "string", "format": "uri"},
+        "record_arguments": {"type": "boolean", "default": false},
+        "stdout": {"type": "boolean", "default": false},
+        "export_file": {"type": "string", "minLength": 1},
+        "max_bytes": {"type": "integer", "minimum": 0},
+        "backups": {"type": "integer", "minimum": 0, "maximum": 100},
+        "otlp_logs_endpoint": {"type": "string", "format": "uri"},
+        "syslog": {"type": "string", "pattern": "^(tcp|udp|tls)://"}
       }
     }
   },
@@ -54,6 +61,9 @@
         "name": {"type": "string", "minLength": 1},
         "action": {"$ref": "#/$defs/action"},
         "rate_limit": {"type": "integer", "minimum": 0, "default": 0},
+        "users": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "groups": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "clients": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
         "arguments": {"type": "array", "items": {"$ref": "#/$defs/argument"}}
       }
     },

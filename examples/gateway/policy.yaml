@@ -1,0 +1,13 @@
+version: 1
+servers:
+  documents:
+    default: deny
+    tools:
+      - {name: echo, action: allow, groups: [engineering], clients: [agentworkflows]}
+  tickets:
+    default: deny
+    tools:
+      - {name: echo, action: ask, groups: [engineering]}
+audit:
+  path: /data/audit.jsonl
+  stdout: true

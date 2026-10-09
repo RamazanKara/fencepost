@@ -26,6 +26,7 @@ type HTTP struct {
 	headers  map[string]string
 	mu       sync.Mutex
 	sessions map[string]*Engine
+	Gateway  bool
 }
 
 func NewHTTP(p *policy.Policy, log *audit.Log, server, lockPath, upstream string, headers map[string]string) (*HTTP, error) {
@@ -39,7 +40,20 @@ func NewHTTP(p *policy.Policy, log *audit.Log, server, lockPath, upstream string
 	return &HTTP{base: e, upstream: upstream, headers: headers, sessions: map[string]*Engine{}, client: &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 30 * time.Second}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
-func (h *HTTP) Close() { h.client.CloseIdleConnections() }
+func (h *HTTP) Close() {
+	h.client.CloseIdleConnections()
+	h.base.Fail()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, e := range h.sessions {
+		e.Fail()
+	}
+}
+
+func (h *HTTP) Configure(identity policy.Identity, source func() *policy.Policy, ask func(context.Context, policy.Approval, approval.Request) string) {
+	h.Gateway = true
+	h.base.Identity, h.base.PolicySource, h.base.Approve = identity, source, ask
+}
 
 func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Origin") != "" {
@@ -86,6 +100,7 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Pin baseline unavailable", http.StatusServiceUnavailable)
 				return
 			}
+			e.Identity, e.PolicySource, e.Approve = h.base.Identity, h.base.PolicySource, h.base.Approve
 		}
 		request, err = e.Begin(r.Context(), message)
 		if err != nil {
@@ -113,6 +128,15 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	copyHeaders(upstream.Header, r.Header)
+	if h.Gateway {
+		upstream.Header.Del("Authorization")
+		upstream.Header.Del("Cookie")
+		for key := range upstream.Header {
+			if strings.HasPrefix(strings.ToLower(key), "x-") || strings.EqualFold(key, "Forwarded") {
+				upstream.Header.Del(key)
+			}
+		}
+	}
 	for key, value := range h.headers {
 		upstream.Header.Set(key, value)
 	}
@@ -145,6 +169,11 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 	}
 	copyHeaders(w.Header(), response.Header)
+	if h.Gateway {
+		w.Header().Del("Set-Cookie")
+		w.Header().Del("WWW-Authenticate")
+		w.Header().Del("Location")
+	}
 	w.Header().Del("Content-Length")
 	w.Header().Del("Content-Encoding")
 	w.Header().Del("ETag")

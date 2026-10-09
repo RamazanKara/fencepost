@@ -1,0 +1,16 @@
+# Merge each entry into the corresponding AgentWorkflows SandboxPolicySet.
+sandboxId: research-team
+mcpServers:
+  documents:
+    url: https://fencepost.example.com/mcp/documents
+    credentialEnv: RESEARCH_MCP_TOKEN
+    tools:
+      echo: 0.01
+workflows:
+  Briefing:
+    allowedProviders: []
+    allowedModels: []
+    allowedTools: [documents.echo]
+    allowedEgress: [https://fencepost.example.com]
+    tokenLimit: 1000
+    costLimitUsd: 1

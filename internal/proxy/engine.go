@@ -28,6 +28,10 @@ type Request struct {
 
 type Engine struct {
 	Policy                          *policy.Policy
+	PolicySource                    func() *policy.Policy
+	Identity                        policy.Identity
+	Approve                         func(context.Context, policy.Approval, approval.Request) string
+	requestContext                  func(mcp.Message) context.Context
 	Log                             *audit.Log
 	ServerName, SessionID, lockPath string
 	mu                              sync.Mutex
@@ -39,6 +43,7 @@ type Engine struct {
 	rates                           map[string][]time.Time
 	rateSweep                       time.Time
 	always                          map[string]bool
+	grantPolicy                     *policy.Policy
 }
 
 func New(p *policy.Policy, log *audit.Log, server, lockPath string) (*Engine, error) {
@@ -55,10 +60,20 @@ func (e *Engine) record(kind, method, tool, decision, rule string, redactions ma
 	if e.Log == nil {
 		return nil
 	}
-	return e.Log.Write(audit.Event{Session: e.SessionID, Kind: kind, Server: e.ServerName, Method: method, Tool: tool, Decision: decision, Rule: rule, Redactions: redactions})
+	return e.Log.Write(audit.Event{Session: e.SessionID, Kind: kind, Server: e.ServerName, Method: method, Tool: tool, Decision: decision, Rule: rule, Redactions: redactions, User: e.Identity.User, Groups: e.Identity.Groups, Client: e.Identity.Client})
+}
+
+func (e *Engine) currentPolicy() *policy.Policy {
+	if e.PolicySource != nil {
+		return e.PolicySource()
+	}
+	return e.Policy
 }
 
 func (e *Engine) Begin(ctx context.Context, m mcp.Message) (*Request, error) {
+	if e.requestContext != nil && m.String("method") != "" && m.Fields["id"] != nil {
+		ctx = e.requestContext(m)
+	}
 	// Re-encode the parsed envelope so duplicate JSON keys cannot produce different
 	// routing decisions in the proxy and the upstream parser.
 	m, err := mcp.Encode(m.Fields)
@@ -163,7 +178,22 @@ func (e *Engine) Check(r *Request) (*mcp.Message, error) {
 	if r.Message.Fields["id"] == nil {
 		return deny("Tool calls require a request ID.", "notification")
 	}
-	action, rule, rate := e.Policy.Match(e.ServerName, r.tool, r.args)
+	p := e.currentPolicy()
+	action, rule, rate := p.MatchIdentity(e.ServerName, r.tool, r.args, e.Identity)
+	if e.Log != nil {
+		event := audit.Event{Session: e.SessionID, Kind: "policy", Method: r.method, Server: e.ServerName, Tool: r.tool, Decision: action, Rule: rule, User: e.Identity.User, Groups: e.Identity.Groups, Client: e.Identity.Client}
+		if p.Audit.RecordArguments {
+			args, hits, _ := scrubValue(r.args, "", true)
+			data, _ := json.Marshal(args)
+			if len(data) <= 16<<10 {
+				event.Arguments, event.Replayable = data, len(hits) == 0
+			}
+		}
+		if err := e.Log.Write(event); err != nil {
+			e.finish(r)
+			return nil, err
+		}
+	}
 	if action == "deny" {
 		if strings.Contains(rule, "/argument:") {
 			return deny("Tool arguments are outside the permitted scope.", rule)
@@ -171,6 +201,10 @@ func (e *Engine) Check(r *Request) (*mcp.Message, error) {
 		return deny("Fencepost policy does not permit this tool.", rule)
 	}
 	e.mu.Lock()
+	if e.grantPolicy != p {
+		e.always = map[string]bool{}
+		e.grantPolicy = p
+	}
 	if !e.pinned {
 		if _, err := os.Stat(e.lockPath); !errors.Is(err, os.ErrNotExist) {
 			e.pinned = true
@@ -190,12 +224,19 @@ func (e *Engine) Check(r *Request) (*mcp.Message, error) {
 		}
 		args, _, _ := scrubValue(r.args, "", true)
 		data, _ := json.Marshal(args)
-		answer := approval.Ask(r.Context, e.Policy.Approval, approval.Request{Session: e.SessionID, Server: e.ServerName, Tool: r.tool, Arguments: data})
+		ask := e.Approve
+		if ask == nil {
+			ask = approval.Ask
+		}
+		answer := ask(r.Context, p.Approval, approval.Request{Session: e.SessionID, Server: e.ServerName, Tool: r.tool, Arguments: data, User: e.Identity.User, Groups: e.Identity.Groups, Client: e.Identity.Client})
 		if answer == "deny" {
 			return deny("Approval was denied or timed out.", "approval")
 		}
 		approvedAlways = answer == "always"
-		if action, rule, _ := e.Policy.Match(e.ServerName, r.tool, r.args); action == "deny" {
+		if e.currentPolicy() != p {
+			return deny("Policy changed while awaiting approval; retry the call.", "policy_changed")
+		}
+		if action, rule, _ := p.MatchIdentity(e.ServerName, r.tool, r.args, e.Identity); action == "deny" {
 			return deny("Tool arguments changed while awaiting approval.", rule)
 		}
 	}
@@ -205,7 +246,7 @@ func (e *Engine) Check(r *Request) (*mcp.Message, error) {
 		reason, hit = "Tool call was cancelled.", "cancelled"
 	} else if e.pinned && !e.trusted[r.tool] {
 		reason, hit = "Tool definition changed; list tools again after reviewing the pin.", "pin"
-	} else if e.Policy.SessionBudget > 0 && e.used >= e.Policy.SessionBudget {
+	} else if p.SessionBudget > 0 && e.used >= p.SessionBudget {
 		reason, hit = "Session tool-call budget exhausted.", "budget"
 	}
 	now := time.Now()

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 - 2026-10-09
+
+- Add an authenticated gateway for supervised stdio and remote Streamable HTTP upstreams, OIDC discovery/JWKS validation, CI keys, and identity-aware policies.
+- Load ordered policy directories or signed HTTPS policies with ETag polling; preview edits against recorded audit calls.
+- Add stdout JSON, rotating-file, OTLP logs and syslog exports, plus filtered log queries.
+- Add a team approval inbox with browser PKCE sign-in, approver/reason audit records and signed chat notifications.
+- Add local distroless image builds, Helm and Compose packaging, GoReleaser builds, and AgentWorkflows team examples.
+
 ## 0.1.0 - 2026-10-09
 
 - Enforce YAML policies over stdio and Streamable HTTP, with argument allowlists, approvals, rate/session limits, and tool pin checks.

@@ -1,6 +1,10 @@
-*
-!Dockerfile
-!dist/
-dist/*
-!dist/fencepost-*-linux-amd64
-!dist/fencepost-*-linux-arm64
+.git
+.cache
+.tools
+.work-*
+bin
+dist
+*.patch
+*.jsonl
+*.head
+*.writing

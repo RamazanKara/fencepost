@@ -1,0 +1,17 @@
+listen: 0.0.0.0:8787
+public_url: http://127.0.0.1:8787
+policy:
+  source: policy.yaml
+auth:
+  api_keys:
+    - env: FENCEPOST_CI_KEY
+      user: ci-agent
+      groups: [engineering]
+      client: agentworkflows
+approval:
+  groups: [approvers]
+servers:
+  documents:
+    url: http://127.0.0.1:9001/mcp
+  tickets:
+    url: http://127.0.0.1:9002/mcp

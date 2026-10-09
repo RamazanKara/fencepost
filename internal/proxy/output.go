@@ -53,6 +53,7 @@ func scrubValue(value any, key string, redact bool) (any, map[string]int, bool) 
 }
 
 func (e *Engine) output(m mcp.Message, tool string) (mcp.Message, error) {
+	p := e.currentPolicy()
 	field := "result"
 	if m.Fields["error"] != nil {
 		field = "error"
@@ -63,7 +64,7 @@ func (e *Engine) output(m mcp.Message, tool string) (mcp.Message, error) {
 	if decoder.Decode(&value) != nil {
 		return Error(m, -32603, "Invalid upstream result."), nil
 	}
-	clean, hits, injection := scrubValue(value, "", e.Policy.Output.RedactSecrets)
+	clean, hits, injection := scrubValue(value, "", p.Output.RedactSecrets)
 	if len(hits) > 0 {
 		if err := e.record("redaction", "tools/call", tool, "", "FP005", hits); err != nil {
 			return m, err
@@ -73,7 +74,7 @@ func (e *Engine) output(m mcp.Message, tool string) (mcp.Message, error) {
 		if err := e.record("rule_hit", "tools/call", tool, "", "FP001", nil); err != nil {
 			return m, err
 		}
-		if e.Policy.Output.Injection == "block" || field == "error" {
+		if p.Output.Injection == "block" || field == "error" {
 			if err := e.record("decision", "tools/call", tool, "deny", "FP001", nil); err != nil {
 				return m, err
 			}
@@ -87,7 +88,7 @@ func (e *Engine) output(m mcp.Message, tool string) (mcp.Message, error) {
 	if err != nil {
 		return m, err
 	}
-	if len(raw) > e.Policy.Output.MaxBytes {
+	if len(raw) > p.Output.MaxBytes {
 		if err := e.record("rule_hit", "tools/call", tool, "", "max_bytes", nil); err != nil {
 			return m, err
 		}

@@ -1,5 +1,7 @@
 # Policy proxy
 
+For authenticated multi-server operation, central sources, identity rules, team approvals and audit exports, see [the gateway guide](gateway.md).
+
 `fencepost proxy` applies a version 1 YAML policy to MCP tool calls. It requires a policy file; missing or invalid policy is an error. `fencepost policy check --policy fencepost.yaml` checks field names, types, actions, globs, regular expressions, JSON paths, timeouts, and endpoint restrictions. [The JSON Schema](../schema/policy.schema.json) supports editor validation; runtime checking additionally validates Go regex syntax, glob syntax, IDNs, and timeout bounds. Unknown servers are denied. Only `tools/call` is subject to tool permissions; protocol discovery, prompts, resources, and client capabilities remain available.
 
 ```yaml
@@ -110,7 +112,7 @@ Use the backup config here so pinning connects directly to the original server. 
 
 ## Approval channel
 
-Run `fencepost approve --policy fencepost.yaml`. It binds a literal loopback address, chooses a random port, writes the local descriptor, and prints a URL containing a random 256-bit token. Open that private URL in a browser. `--listen 127.0.0.1:8790` selects a fixed loopback port. Non-loopback and hostname listen addresses are rejected.
+In standalone proxy mode, run `fencepost approve --policy fencepost.yaml`. It binds a literal loopback address, chooses a random port, writes the local descriptor, and prints a URL containing a random 256-bit token. Open that private URL in a browser. `--listen 127.0.0.1:8790` selects a fixed loopback port. Non-loopback and hostname listen addresses are rejected.
 
 The page shows server, tool, and sanitized arguments with **Approve once**, **Always for this session**, and **Deny**. An always grant applies to that tool in that session; it does not bypass argument rules, pins, rate limits, or budget. The proxy denies on timeout, cancellation, a missing channel, malformed answers, or connection errors. Argument constraints are checked again after approval. The page escapes untrusted text, checks the Host and Origin headers, authenticates every route, and disables caching and framing. The descriptor is removed on orderly shutdown. After an abrupt termination, remove a stale descriptor before restarting the approval service.
 
@@ -135,7 +137,7 @@ Respond with HTTP 200 and `{"decision":"allow"}` or `{"decision":"deny"}`. Sign 
 
 Each JSONL record holds a sequence number, previous hash, sanitized event, and SHA-256 hash of the exact encoded entry. The checkpoint at `<log>.head` records final hash, count, and file size, making tail deletion detectable as well as edits, internal deletions, and reordering. Keep the log and checkpoint together. `<log>.writing` is the persistent OS lock file; locks release automatically when a process exits. Do not delete or replace these files while proxies are running.
 
-Audit entries contain time, session, server, method, tool, decision, matched rule identifiers, and redaction counts. They do not contain arguments, result bodies, credentials, or upstream error bodies. Writes reach the operating system before forwarding an allowed call; orderly shutdown also syncs the files. Sudden power loss can leave a torn final entry/checkpoint, which verification rejects. A hash chain is not an authenticated signature: someone who can replace both log and checkpoint can forge history. Anchor the final hash outside that trust boundary for stronger evidence.
+Audit entries contain time, session, server, method, tool, decision, matched rule identifiers, and redaction counts. They omit arguments by default and never contain result bodies or upstream error bodies. Opt-in `audit.record_arguments` records sanitized arguments for policy replay; see the gateway guide for retention and replay limits. Writes reach the operating system before forwarding an allowed call; orderly shutdown also syncs the files. Sudden power loss can leave a torn final entry/checkpoint, which verification rejects. A hash chain is not an authenticated signature: someone who can replace both log and checkpoint can forge history. Anchor the final hash outside that trust boundary for stronger evidence.
 
 ```sh
 fencepost log tail --file fencepost-audit.jsonl --n 20

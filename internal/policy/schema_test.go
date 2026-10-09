@@ -18,6 +18,7 @@ func TestExampleSchemas(t *testing.T) {
 	if err != nil || len(paths) != 3 {
 		t.Fatal(paths, err)
 	}
+	paths = append(paths, "../../examples/gateway/policy.yaml", "../../examples/agentworkflows/policy.yaml")
 	for _, path := range paths {
 		t.Run(filepath.Base(path), func(t *testing.T) {
 			data, err := os.ReadFile(path)

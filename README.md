@@ -4,7 +4,7 @@ Fencepost audits MCP servers and enforces tool-call policy between an AI agent a
 
 ## 60-second quickstart
 
-Fencepost **0.1.0**. From this checkout with Go 1.27.2, run the first command once to build the CLI; compilation and dependency downloads are setup time and may exceed a minute. The following three CLI commands are the 60-second walkthrough: create a starter policy, validate it, and explain a denied call. No MCP server or credential is needed.
+Fencepost **0.2.0**. From this checkout with Go 1.27.2, run the first command once to build the CLI; compilation and dependency downloads are setup time and may exceed a minute. The following three CLI commands are the 60-second walkthrough: create a starter policy, validate it, and explain a denied call. No MCP server or credential is needed.
 
 <!-- quickstart -->
 ```sh
@@ -35,6 +35,12 @@ fencepost pin --config ./mcp.json --update filesystem/read_file
 Exit codes: **0** for success, **1** for findings at or above `--fail-on` (default `medium`) or lock drift, **2** for invalid input or an incomplete scan. JSON and SARIF include connection errors. A failed connection never counts as a clean scan.
 
 `pin` writes `fencepost.lock` in the working directory and refuses to overwrite an existing baseline. `verify` compares launch specs and tool definitions, with unified description diffs. `pin --update server/tool` approves just that tool's change, addition, or removal. It does not approve launch changes or unrelated tool drift. Review and deliberately replace the baseline to approve launch or server changes. Keep the lockfile under version control when its descriptions are suitable for sharing; remove the root ignore entry to do so.
+
+## Team gateway
+
+`fencepost gateway --config gateway.yaml` fronts multiple stdio and remote MCP servers at `/mcp/NAME`. It adds OIDC/OAuth resource discovery, JWKS/audience validation, CI keys, user/group/client policy rules, signed central policy updates, a team approval inbox, and audit exports.
+
+See [gateway setup and packaging](docs/gateway.md) and [AgentWorkflows integration](docs/agentworkflows.md). Preview edits with `fencepost policy test --policy ./policies --file audit.jsonl`; filter audit events with `fencepost log query --user alice`. `make image` builds the local distroless image.
 
 ## Protect tool calls
 
@@ -116,7 +122,7 @@ remote (testdata\home\.cursor\mcp.json)
 | Require approval for configured calls | Share budgets across independent MCP sessions |
 | Redact recognized secrets and flag suspected injection | Detect every secret or make untrusted output safe |
 | Detect audit edits against a trusted checkpoint | Detect replacement of both log and checkpoint |
-| Relay stdio and Streamable HTTP | Implement OAuth or enforce policy on all protocol methods |
+| Relay stdio and Streamable HTTP | Enforce policy on all protocol methods |
 
 Read the [threat model](docs/threat-model.md) before trusting a deployment.
 
@@ -139,13 +145,13 @@ Read [rule explanations and fix hints](docs/rules.md). These are review heuristi
 
 The scanner targets MCP **2026-07-28** and supports **2025-11-25** initialization. It handles stdio and Streamable HTTP with JSON or SSE responses, follows list pagination, and preserves unknown definition fields. See [protocol details, limits, and config provenance](docs/PROTOCOL.md).
 
-All client formats are tested with fixtures. They have not been verified against running client applications. Claude Desktop's Linux path, Claude Code's settings-file compatibility, historical VS Code settings, and Windsurf's historical path include inferred compatibility behavior. The protocol document identifies each case. OAuth, interactive inputs, deprecated separate HTTP+SSE endpoints, and dynamic config helpers are not supported in this stage.
+All client formats are tested with fixtures. They have not been verified against running client applications. Claude Desktop's Linux path, Claude Code's settings-file compatibility, historical VS Code settings, and Windsurf's historical path include inferred compatibility behavior. The protocol document identifies each case. Scanner-side OAuth, interactive inputs, deprecated separate HTTP+SSE endpoints, and dynamic config helpers remain unsupported. Gateway clients authenticate through the configured issuer; remote upstream credentials are configured separately.
 
 Use environment references such as `${TOKEN}` or `${env:TOKEN}` for credentials. Reports mask known credential values as `<redacted:ENV_NAME>` and do not echo process stderr or server error bodies. Offline scanning does not resolve or expose the referenced environment values.
 
 ## Development
 
-Requirements: Go 1.27.2, GNU Make, a C compiler for Go's race detector, and Python 3 with `jsonschema==4.26.0` for SARIF and policy schema checks. Release builds use `CGO_ENABLED=0`; the race detector's compiler requirement is only for tests. Application dependencies are `gopkg.in/yaml.v3` for YAML/config locations and `golang.org/x/net/idna` (with `x/text`) for validated Unicode host normalization.
+Requirements: Go 1.27.2, GNU Make, a C compiler for Go's race detector, and Python 3 with `jsonschema==4.26.0` for SARIF and policy schema checks. Release builds use `CGO_ENABLED=0`; the race detector's compiler requirement is only for tests. JWT validation uses `github.com/golang-jwt/jwt/v5`; other application dependencies are `gopkg.in/yaml.v3` for YAML/config locations and `golang.org/x/net/idna` (with `x/text`) for validated Unicode host normalization.
 
 ```sh
 python -m pip install jsonschema==4.26.0

@@ -34,6 +34,15 @@ type Tool struct {
 	Action    string     `yaml:"action"`
 	Arguments []Argument `yaml:"arguments,omitempty"`
 	RateLimit int        `yaml:"rate_limit,omitempty"`
+	Users     []string   `yaml:"users,omitempty"`
+	Groups    []string   `yaml:"groups,omitempty"`
+	Clients   []string   `yaml:"clients,omitempty"`
+}
+
+type Identity struct {
+	User   string   `json:"user" yaml:"user"`
+	Groups []string `json:"groups,omitempty" yaml:"groups"`
+	Client string   `json:"client,omitempty" yaml:"client"`
 }
 
 type Argument struct {
@@ -62,11 +71,21 @@ type Approval struct {
 }
 
 type Audit struct {
-	Path         string `yaml:"path"`
-	OTLPEndpoint string `yaml:"otlp_endpoint"`
+	Path             string `yaml:"path"`
+	OTLPEndpoint     string `yaml:"otlp_endpoint"`
+	RecordArguments  bool   `yaml:"record_arguments"`
+	Stdout           bool   `yaml:"stdout"`
+	ExportFile       string `yaml:"export_file"`
+	MaxBytes         int64  `yaml:"max_bytes"`
+	Backups          int    `yaml:"backups"`
+	OTLPLogsEndpoint string `yaml:"otlp_logs_endpoint"`
+	Syslog           string `yaml:"syslog"`
 }
 
 func Read(filename string) (*Policy, error) {
+	if info, err := os.Stat(filename); err == nil && info.IsDir() {
+		return readDirectory(filename)
+	}
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("%s: cannot read policy: %w", filename, err)
@@ -139,14 +158,42 @@ func Parse(data []byte, base string) (*Policy, error) {
 	if p.Audit.OTLPEndpoint != "" && !SafeEndpoint(p.Audit.OTLPEndpoint) {
 		return nil, at("OTLP endpoint requires HTTPS or literal loopback HTTP", "audit", "otlp_endpoint")
 	}
+	if p.Audit.OTLPLogsEndpoint != "" && !SafeEndpoint(p.Audit.OTLPLogsEndpoint) {
+		return nil, at("OTLP logs endpoint requires HTTPS or literal loopback HTTP", "audit", "otlp_logs_endpoint")
+	}
+	if p.Audit.MaxBytes < 0 || p.Audit.Backups < 0 || p.Audit.Backups > 100 {
+		return nil, at("audit max_bytes must be nonnegative; backups must be 0..100", "audit")
+	}
+	if p.Audit.ExportFile != "" {
+		p.Audit.ExportFile = absolute(base, p.Audit.ExportFile)
+		if p.Audit.MaxBytes == 0 {
+			p.Audit.MaxBytes = 10 << 20
+		}
+		if p.Audit.Backups == 0 {
+			p.Audit.Backups = 5
+		}
+	}
 	p.Approval.LocalFile = absolute(base, p.Approval.LocalFile)
 	p.Audit.Path = absolute(base, p.Audit.Path)
+	if p.Audit.ExportFile != "" && p.Audit.ExportFile == p.Audit.Path {
+		return nil, at("audit export_file must differ from the authoritative log", "audit", "export_file")
+	}
 	for name, server := range p.Servers {
 		if name == "" || !action(server.Default) {
 			return nil, at("each server requires a name and default allow, deny, or ask", "servers", name, "default")
 		}
 		for i := range server.Tools {
 			t := &server.Tools[i]
+			for _, values := range [][]string{t.Users, t.Groups, t.Clients} {
+				if values != nil && len(values) == 0 {
+					return nil, at("identity lists must be nonempty", "servers", name, "tools", strconv.Itoa(i))
+				}
+				for _, value := range values {
+					if value == "" {
+						return nil, at("identity values must be nonempty", "servers", name, "tools", strconv.Itoa(i))
+					}
+				}
+			}
 			if _, err := path.Match(t.Name, ""); err != nil || t.Name == "" {
 				return nil, at("invalid tool name glob", "servers", name, "tools", strconv.Itoa(i), "name")
 			}
@@ -273,11 +320,18 @@ func absolute(base, name string) string {
 func action(s string) bool { return s == "allow" || s == "deny" || s == "ask" }
 
 func (p *Policy) Match(server, tool string, args map[string]any) (string, string, int) {
+	return p.MatchIdentity(server, tool, args, Identity{})
+}
+
+func (p *Policy) MatchIdentity(server, tool string, args map[string]any, identity Identity) (string, string, int) {
 	s, ok := p.Servers[server]
 	if !ok {
 		return "deny", "server", 0
 	}
 	for i, t := range s.Tools {
+		if !identityMatches(t.Users, []string{identity.User}) || !identityMatches(t.Groups, identity.Groups) || !identityMatches(t.Clients, []string{identity.Client}) {
+			continue
+		}
 		if matched, _ := path.Match(t.Name, tool); !matched {
 			continue
 		}
@@ -290,4 +344,18 @@ func (p *Policy) Match(server, tool string, args map[string]any) (string, string
 		return t.Action, rule, t.RateLimit
 	}
 	return s.Default, "default", 0
+}
+
+func identityMatches(required, actual []string) bool {
+	if required == nil {
+		return true
+	}
+	for _, want := range required {
+		for _, value := range actual {
+			if want == value {
+				return true
+			}
+		}
+	}
+	return false
 }

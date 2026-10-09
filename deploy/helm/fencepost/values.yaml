@@ -1,0 +1,19 @@
+replicaCount: 1
+image:
+  repository: fencepost
+  tag: "0.2.0"
+  pullPolicy: IfNotPresent
+service:
+  port: 8787
+configSecret: fencepost-config
+credentialsSecret: fencepost-credentials
+resources:
+  requests: {cpu: 100m, memory: 64Mi}
+  limits: {cpu: "1", memory: 256Mi}
+persistence:
+  enabled: false
+  existingClaim: ""
+networkPolicy:
+  enabled: false
+  ingressNamespaceSelector: {}
+  egress: []
