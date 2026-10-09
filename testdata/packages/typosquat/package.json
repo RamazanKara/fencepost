@@ -1,0 +1,11 @@
+{
+  "name": "@modelcontextprotocol/server-filesytem",
+  "version": "1.0.0",
+  "private": true,
+  "bin": "server.mjs",
+  "maintainers": [
+    {
+      "name": "fixture-owner"
+    }
+  ]
+}

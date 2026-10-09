@@ -102,8 +102,8 @@ func TestDeterministicLock(t *testing.T) {
 }
 
 func TestDriftAndTargetedUpdate(t *testing.T) {
-	old := Lock{1, map[string]Server{"test": {strings.Repeat("a", 64), map[string]Tool{"changed": {strings.Repeat("b", 64), "old\nline"}, "removed": {strings.Repeat("c", 64), "gone"}}}}}
-	now := Lock{1, map[string]Server{"test": {strings.Repeat("a", 64), map[string]Tool{"changed": {strings.Repeat("d", 64), "new\nline"}, "added": {strings.Repeat("e", 64), "added"}}}}}
+	old := Lock{Version: 1, Servers: map[string]Server{"test": {strings.Repeat("a", 64), map[string]Tool{"changed": {strings.Repeat("b", 64), "old\nline"}, "removed": {strings.Repeat("c", 64), "gone"}}}}}
+	now := Lock{Version: 1, Servers: map[string]Server{"test": {strings.Repeat("a", 64), map[string]Tool{"changed": {strings.Repeat("d", 64), "new\nline"}, "added": {strings.Repeat("e", 64), "added"}}}}}
 	changes := Compare(old, now)
 	if len(changes) != 3 {
 		t.Fatalf("%+v", changes)

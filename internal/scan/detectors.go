@@ -5,9 +5,10 @@ import (
 	"strings"
 
 	"github.com/RamazanKara/fencepost/internal/clientconfig"
+	"github.com/RamazanKara/fencepost/internal/rulebundle"
 )
 
-func HiddenInstructions(text string) bool { return hidden.MatchString(stripInvisible(text)) }
+func HiddenInstructions(text string) bool { return rulebundle.Match(stripInvisible(text)) }
 
 var secretWord = regexp.MustCompile(`[A-Za-z0-9_+=.-]{24,}`)
 

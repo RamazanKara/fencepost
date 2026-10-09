@@ -1,0 +1,10 @@
+version: 1
+servers:
+  browser:
+    default: deny
+    tools:
+      - name: browser_navigate
+        action: allow
+        arguments:
+          - {path: $.url, host: [example.com]}
+      - {name: browser_snapshot, action: allow}

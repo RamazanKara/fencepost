@@ -13,8 +13,10 @@ import (
 	"github.com/RamazanKara/fencepost/internal/clientconfig"
 	"github.com/RamazanKara/fencepost/internal/pin"
 	"github.com/RamazanKara/fencepost/internal/report"
+	"github.com/RamazanKara/fencepost/internal/rulebundle"
 	"github.com/RamazanKara/fencepost/internal/scan"
 	"github.com/RamazanKara/fencepost/internal/version"
+	"github.com/RamazanKara/fencepost/internal/vetting"
 )
 
 func main() {
@@ -25,11 +27,19 @@ func main() {
 
 func run(ctx context.Context, args []string, out, errOut io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(out, "Usage: fencepost <scan|pin|verify|proxy|gateway|wrap|unwrap|policy|approve|log|init|explain|doctor|version> [options]\n\nscan    Audit configured MCP servers (--offline, --format table|json|sarif, --fail-on low|medium|high|critical)\npin     Record trusted definitions in fencepost.lock (--update server/tool)\nverify  Reconnect and detect lockfile drift\nproxy   Enforce policy over stdio or Streamable HTTP\ngateway Serve authenticated team MCP endpoints (--config gateway.yaml)\nwrap    Preview client config changes; --write applies with a backup\nunwrap  Preview restoring backups; --write applies\npolicy check|test  Validate policy or replay recorded calls\napprove Open a local approval channel and print its private URL\nlog tail|verify|stats|query  Inspect the audit log\n\ninit    Write a starter policy without prompts\nexplain Evaluate a tool-call JSON against a policy\ndoctor  Check config discovery and permissions\nversion Show version, commit, and build date\n\nUse <command> --help for options.")
+		fmt.Fprintln(out, "Usage: fencepost <scan|pin|verify|proxy|gateway|wrap|unwrap|policy|approve|log|init|explain|doctor|vet|ui|rules|version> [options]\n\nscan    Audit configured MCP servers (--offline, --format table|json|sarif, --fail-on low|medium|high|critical)\npin     Record trusted definitions in fencepost.lock (--update server/tool)\nverify  Reconnect and detect lockfile drift\nproxy   Enforce policy over stdio or Streamable HTTP\ngateway Serve authenticated team MCP endpoints (--config gateway.yaml)\nwrap    Preview client config changes; --write applies with a backup\nunwrap  Preview restoring backups; --write applies\npolicy check|test  Validate policy or replay recorded calls\napprove Open a local approval channel and print its private URL\nlog tail|verify|stats|query  Inspect the audit log\n\ninit    Write a starter policy without prompts\nexplain Evaluate a tool-call JSON against a policy\ndoctor  Check config discovery and permissions\nvet     Vet a package or URL before installation (--net)\nui      Open the private loopback console\nrules update  Fetch a signed scan rules bundle (--url HTTPS_URL)\nversion Show version, commit, and build date\n\nUse <command> --help for options.")
 		return 0
 	}
 	command := args[0]
+	if command == "scan" || command == "vet" || command == "proxy" || command == "gateway" {
+		if err := rulebundle.Load(); err != nil {
+			fmt.Fprintln(errOut, "Cannot load signed scan rules:", err)
+			return 2
+		}
+	}
 	switch command {
+	case "vet", "ui", "rules":
+		return runLocal(ctx, args, out, errOut)
 	case "gateway":
 		return runGateway(ctx, args[1:], out, errOut)
 	case "version", "--version":
@@ -133,6 +143,13 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) int {
 	}
 	const lockPath = "fencepost.lock"
 	if command == "pin" {
+		if update == "" {
+			var warnings []string
+			current.Packages, warnings = vetting.PinMetadata(ctx, servers)
+			for _, warning := range warnings {
+				fmt.Fprintln(errOut, report.Safe(warning, servers))
+			}
+		}
 		if update != "" {
 			var old pin.Lock
 			old, err = pin.Read(lockPath)

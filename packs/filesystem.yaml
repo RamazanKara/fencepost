@@ -1,0 +1,13 @@
+version: 1
+servers:
+  filesystem:
+    default: deny
+    tools:
+      - name: read_file
+        action: allow
+        arguments:
+          - {path: $.path, path_prefix: [./workspace]}
+      - name: list_directory
+        action: allow
+        arguments:
+          - {path: $.path, path_prefix: [./workspace]}

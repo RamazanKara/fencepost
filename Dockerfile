@@ -1,7 +1,7 @@
 FROM --platform=$BUILDPLATFORM golang:1.27.2 AS build
 ARG TARGETOS
 ARG TARGETARCH
-ARG VERSION=0.2.0
+ARG VERSION=0.3.0
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

@@ -146,7 +146,7 @@ func Audit(servers []clientconfig.Server, inventories []Inventory) Result {
 				flags["FP002"] = true
 			}
 			for _, desc := range descriptions {
-				if hidden.MatchString(stripInvisible(desc)) {
+				if HiddenInstructions(desc) {
 					flags["FP001"] = true
 				}
 				if invisible(desc) {
@@ -219,7 +219,6 @@ func Audit(servers []clientconfig.Server, inventories []Inventory) Result {
 	return result
 }
 
-var hidden = regexp.MustCompile(`(?i)(ignore\s+(?:all\s+)?(?:previous|prior|system)\s*(?:instructions|prompts|messages)?|do\s+not\s+(?:tell|inform|show)\s+the\s+user|before\s+(?:using|calling)\s+any\s+other\s+tool|<\s*/?\s*(?:important|system|instructions?|override)\b|(?:read|open|cat|access|upload)\b[^.!?\n]{0,100}(?:~[/\\]\.ssh|\.ssh[/\\]|\.env\b)|(?:send|upload|exfiltrate|forward)\b[^\n]{0,120}(?:https?://))`)
 var link = regexp.MustCompile(`(?i)\b(?:https?|ftp)://[^\s<>]+`)
 var blob = regexp.MustCompile(`[A-Za-z0-9+/]{256,}={0,2}`)
 

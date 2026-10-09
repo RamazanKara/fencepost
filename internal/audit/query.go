@@ -52,11 +52,8 @@ type Diff struct {
 
 func PolicyDiff(path string, p *policy.Policy, out io.Writer) (int, error) {
 	var events []Event
-	modern := map[string]bool{}
+
 	_, err := Verify(path, func(e Event) {
-		if e.Kind == "policy" {
-			modern[e.Session] = true
-		}
 		if e.Kind == "policy" || (e.Kind == "decision" && e.Method == "tools/call") {
 			events = append(events, e)
 		}
@@ -64,8 +61,21 @@ func PolicyDiff(path string, p *policy.Policy, out io.Writer) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	return PolicyDiffEvents(events, p, out)
+}
+
+func PolicyDiffEvents(events []Event, p *policy.Policy, out io.Writer) (int, error) {
+	modern := map[string]bool{}
+	for _, e := range events {
+		if e.Kind == "policy" {
+			modern[e.Session] = true
+		}
+	}
 	count := 0
 	for _, e := range events {
+		if e.Kind != "policy" && (e.Kind != "decision" || e.Method != "tools/call") {
+			continue
+		}
 		if e.Kind != "policy" && (modern[e.Session] || (e.Rule != "default" && e.Rule != "server" && !strings.HasPrefix(e.Rule, "tool:"))) {
 			continue
 		}

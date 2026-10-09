@@ -105,7 +105,7 @@ Arguments are omitted by default. Opt-in `record_arguments` stores sanitized arg
 
 ## Local packaging
 
-`make image` builds `fencepost:0.2.0` locally with Docker/Linux containers and registry access to Go/distroless bases. It never pushes. The image has no shell or stdio executables; supply reviewed binaries or remote upstreams.
+`make image` builds `fencepost:0.3.0` locally with Docker/Linux containers and registry access to Go/distroless bases. It never pushes. The image has no shell or stdio executables; supply reviewed binaries or remote upstreams.
 
 Set a random `FENCEPOST_CI_KEY` of at least 32 bytes and run `docker compose -f examples/gateway/docker-compose.yaml up --build`. Two echo servers share the gateway's network namespace and bind loopback. Call `http://127.0.0.1:8787/mcp/documents` with the key. Ticket calls intentionally ask; configure OIDC and an approver group to allow them. Audit persists in a named volume.
 

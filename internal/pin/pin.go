@@ -31,8 +31,14 @@ type Server struct {
 }
 
 type Lock struct {
-	Version int               `yaml:"version"`
-	Servers map[string]Server `yaml:"servers"`
+	Version  int                `yaml:"version"`
+	Servers  map[string]Server  `yaml:"servers"`
+	Packages map[string]Package `yaml:"packages,omitempty"`
+}
+
+type Package struct {
+	Version     string   `yaml:"version"`
+	Maintainers []string `yaml:"maintainers"`
 }
 
 // Canonical sorts object keys, retains array order, and normalizes numbers exactly.
@@ -122,7 +128,7 @@ func ToolHash(tool mcp.Tool) (string, error) {
 }
 
 func Snapshot(inventories []scan.Inventory) (Lock, error) {
-	lock := Lock{1, map[string]Server{}}
+	lock := Lock{Version: 1, Servers: map[string]Server{}}
 	servers := make([]clientconfig.Server, 0, len(inventories))
 	for _, inv := range inventories {
 		servers = append(servers, inv.Server)
@@ -278,7 +284,7 @@ func Update(old, current Lock, target string) (Lock, error) {
 	if !was && !is {
 		return Lock{}, errors.New("update target does not exist")
 	}
-	updated := Lock{old.Version, map[string]Server{}}
+	updated := Lock{Version: old.Version, Servers: map[string]Server{}, Packages: old.Packages}
 	for name, s := range old.Servers {
 		copy := Server{s.LaunchHash, map[string]Tool{}}
 		for name, t := range s.Tools {

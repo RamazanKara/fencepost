@@ -1,0 +1,9 @@
+version: 1
+servers:
+  shell:
+    default: deny
+    tools:
+      - name: run_command
+        action: allow
+        arguments:
+          - {path: $.command, enum: [pwd, whoami]}

@@ -13,7 +13,7 @@ Fencepost sits between MCP clients and configured servers. It assumes the client
 
 ## What it does not enforce
 
-Fencepost does not isolate a process. A server still has its OS account's filesystem, network, process-execution, and credential access. A malicious server can ignore an approved argument, change behavior while keeping the same tool description, read a secret itself, send data directly over the network, or attack the client using a vulnerability in the client. Use an OS sandbox, container/VM boundaries, filesystem permissions, and network controls to contain it. The CI no-network example denies exposed network tools; it does not disable network system calls.
+The proxy and gateway do not isolate a process. A server still has its OS account's filesystem, network, process-execution, and credential access. A malicious server can ignore an approved argument, change behavior while keeping the same tool description, read a secret itself, send data directly over the network, or attack the client using a vulnerability in the client. Use an OS sandbox, container/VM boundaries, filesystem permissions, and network controls to contain it. The CI no-network example denies exposed network tools; it does not disable network system calls.
 
 Path validation and a separate process opening the path cannot be atomic. An attacker with write access to a checked directory can race symlink/directory replacement after approval. Hard links, mount changes, Windows filesystem aliases, and differences in the server's path interpretation can also defeat a purely argument-level check. Fencepost rejects ambiguous syntax and rechecks after approval, but does not give the server a pre-opened restricted file descriptor. Keep allowed roots under trusted control and enforce OS permissions.
 
@@ -47,3 +47,10 @@ Central policy refreshes atomically replace validated policy. Fetch, signature o
 Gateway budgets and approvals remain local to identity/server transport sessions. They are not shared across replicas or restarts; token/group changes can create new transport state. The Helm chart requires one replica. Stdio processes run with the gateway's OS privileges and are not a tenant sandbox. Deploy separate gateways/containers when teams require OS isolation.
 
 Audit exports are bounded and best effort; the local chain/checkpoint remain authoritative. Rotated export files have no separate checkpoints. Opt-in argument recording may retain sensitive information the redactor misses; replay reports unknown where arguments are unavailable or altered. Restrict log access and retention. TLS syslog is preferable outside a trusted network.
+
+
+## Vetting and local console
+
+The separate [vet command](vetting.md) probes OS containment and reports its actual limits. It refuses default no-network execution when no backend is available; `--net` permits documented best effort on Windows/macOS. Metadata/download requests happen outside the server sandbox. A passing trust report is not executable attestation.
+
+The [console](console.md) reads local configs, pins and verified audit history, and can replace its selected policy after strict validation. Protect its private startup URL. Edits and recent-call tests do not execute servers or approve pins. [Rule updates](rule-updates.md) authenticate poisoning patterns with the compiled release key; the publisher and local cached version remain trust boundaries.

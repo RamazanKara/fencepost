@@ -1,0 +1,10 @@
+version: 1
+servers:
+  database:
+    default: deny
+    tools:
+      - {name: list_tables, action: allow}
+      - name: read_query
+        action: allow
+        arguments:
+          - {path: $.query, enum: ['SELECT 1', 'SELECT current_timestamp']}

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Fencepost · Local console</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">Fencepost<span>Local console</span></div>
+    <nav aria-label="Console views">
+      <button data-view="servers" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="1"/><rect x="3" y="14" width="18" height="7" rx="1"/><path d="M7 6h1m-1 11h1m5-11h4m-4 11h4"/></svg>Servers</button>
+      <button data-view="calls"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2h9l4 4v16H6zM9 10h7m-7 4h7m-7 4h4"/></svg>Recent calls</button>
+      <button data-view="policy"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 9 4v6c0 5-9 10-9 10S3 17 3 12V6z"/></svg>Policy</button>
+    </nav>
+    <button id="theme" class="theme">Dark theme</button>
+  </aside>
+  <main>
+    <p id="error" class="notice danger" role="alert" hidden></p>
+    <section id="servers" aria-labelledby="servers-title">
+      <header><div><h1 id="servers-title">Wrapped servers</h1><p>Configured proxies and their current pin status.</p></div><button class="primary" id="refresh">Refresh</button></header>
+      <div id="server-list" class="table" aria-live="polite"></div>
+      <p class="notice">Pin status uses local baselines and recent recorded checks. Refreshing this page does not start servers.</p>
+      <div class="detail"><h2>Review drift</h2><div id="drift-list"></div></div>
+    </section>
+    <section id="calls" aria-labelledby="calls-title" hidden>
+      <header><div><h1 id="calls-title">Recent calls</h1><p>Decisions and redactions from the verified audit log.</p></div></header>
+      <div class="filters"><label>Find a server or tool<input id="search" type="search" placeholder="Search calls"></label><label>Show<select id="decision"><option value="all">All events</option><option value="deny">Denies</option><option value="redacted">Redactions</option><option value="allow">Allowed calls</option></select></label></div>
+      <p id="call-count" class="caption"></p>
+      <div id="call-list" class="table" aria-live="polite"></div>
+      <p class="caption">Latest 200 audit events. Arguments are only available when recording was enabled. Results are never stored.</p>
+    </section>
+    <section id="policy" aria-labelledby="policy-title" hidden>
+      <header><div><h1 id="policy-title">Policy editor</h1><p>Validate an edit, preview its decisions, then save.</p></div><a class="button" href="/api/schema" download="policy.schema.json">Policy schema</a></header>
+      <label for="policy-text">Policy YAML</label>
+      <textarea id="policy-text" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="policy-help"></textarea>
+      <p id="policy-help" class="caption">Validation uses the same strict fields and constraints as the proxy. Saving does not approve pins or pending calls.</p>
+      <div class="actions"><button id="validate">Validate</button><button id="test-policy">Test against recent calls</button><button id="save-policy" class="primary">Save policy</button><button id="reload-policy">Reload from disk</button></div>
+      <div id="policy-result" class="notice" role="status" aria-live="polite" hidden></div>
+      <pre id="test-results" hidden></pre>
+    </section>
+  </main>
+</body>
+</html>

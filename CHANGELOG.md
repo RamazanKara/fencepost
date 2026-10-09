@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 - 2026-10-09
+
+- Vet npm, PyPI, OCI and MCP registry packages or remote endpoints before installation, with explicit isolation limits, scan findings, package risk signals and pinned maintainer comparisons.
+- Compose tested, deny-by-default filesystem, git, fetch, browser, database, shell and cloud starter packs with `init --pack`.
+- Add an embedded authenticated loopback console for server/pin state, verified audit events, policy validation, replay and conflict-checked saves.
+- Add opt-in Ed25519-signed poisoning-rule bundles with bounded validation and rollback rejection.
+- Build a static documentation site locally, and capture console views in both themes at desktop and phone sizes with Playwright.
+
 ## 0.2.0 - 2026-10-09
 
 - Add an authenticated gateway for supervised stdio and remote Streamable HTTP upstreams, OIDC discovery/JWKS validation, CI keys, and identity-aware policies.

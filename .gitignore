@@ -4,3 +4,6 @@
 /fencepost.lock
 *.test
 /dist/
+/node_modules/
+/site/
+/.ui-fixture/

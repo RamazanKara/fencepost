@@ -1,4 +1,4 @@
-.PHONY: lint test e2e build release image
+.PHONY: lint test e2e build release image docs ui-test
 
 lint:
 	go vet ./...
@@ -18,4 +18,11 @@ release:
 	go run scripts/build.go release
 
 image:
-	docker build -t fencepost:0.2.0 .
+	docker build -t fencepost:0.3.0 .
+
+docs:
+	go run scripts/docs.go
+
+ui-test:
+	go run scripts/ui-fixture.go
+	npm run test:ui

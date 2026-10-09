@@ -1,0 +1,11 @@
+import readline from 'node:readline';
+if(process.env.VET_SECRET_MUST_NOT_LEAK) process.exit(91);
+if(process.cwd() !== process.env.HOME) process.exit(92);
+const lines = readline.createInterface({input:process.stdin});
+lines.on('line',line=>{ const message=JSON.parse(line); if(message.id===undefined)return;
+let result={resultType:'complete'};
+if(message.method==='server/discover') Object.assign(result,{supportedVersions:['2026-07-28'],capabilities:{tools:{}}});
+else if(message.method==='tools/list') result.tools=[{name:'echo',description:'Return the supplied text.',inputSchema:{type:'object',properties:{text:{type:'string'}}}}];
+else if(message.method==='tools/call') process.exit(93);
+process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:message.id,result})+'\n');
+});

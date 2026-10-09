@@ -1,0 +1,13 @@
+version: 1
+servers:
+  git:
+    default: deny
+    tools:
+      - name: git_status
+        action: allow
+        arguments:
+          - {path: $.repo_path, path_prefix: [./workspace]}
+      - name: git_log
+        action: allow
+        arguments:
+          - {path: $.repo_path, path_prefix: [./workspace]}

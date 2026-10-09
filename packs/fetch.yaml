@@ -1,0 +1,9 @@
+version: 1
+servers:
+  fetch:
+    default: deny
+    tools:
+      - name: fetch
+        action: allow
+        arguments:
+          - {path: $.url, host: [example.com]}

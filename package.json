@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "scripts": {
+    "test:ui": "node scripts/ui-test.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.64.0"
+  }
+}

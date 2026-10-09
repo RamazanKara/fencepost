@@ -14,6 +14,7 @@ import (
 
 	"github.com/RamazanKara/fencepost/internal/clientconfig"
 	"github.com/RamazanKara/fencepost/internal/policy"
+	"github.com/RamazanKara/fencepost/packs"
 	"gopkg.in/yaml.v3"
 )
 
@@ -22,11 +23,13 @@ func runOperatorCommands(args []string, out, errOut io.Writer) int {
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(errOut)
 	policyPath, server, config := "fencepost.yaml", "filesystem", ""
+	packNames := ""
 	if command != "explain" {
 		flags.StringVar(&policyPath, "policy", policyPath, "policy file")
 	}
 	if command == "init" {
 		flags.StringVar(&server, "server", server, "exact MCP server name")
+		flags.StringVar(&packNames, "pack", "", "comma-separated starter packs")
 	}
 	if command == "doctor" {
 		flags.StringVar(&config, "config", "", "check only this client config")
@@ -110,6 +113,14 @@ func runOperatorCommands(args []string, out, errOut io.Writer) int {
 			"output": map[string]any{"redact_secrets": true, "max_bytes": 1048576, "injection": "warn"},
 		}
 		data, err := yaml.Marshal(value)
+		if packNames != "" {
+			serverSet := false
+			flags.Visit(func(f *flag.Flag) { serverSet = serverSet || f.Name == "server" })
+			if serverSet {
+				return fail(errors.New("--server and --pack cannot be combined; edit server names in the composed policy"))
+			}
+			data, err = packs.Compose(packNames)
+		}
 		if err != nil {
 			return fail(err)
 		}
@@ -124,7 +135,7 @@ func runOperatorCommands(args []string, out, errOut io.Writer) int {
 		if err := errors.Join(writeErr, f.Close()); err != nil {
 			return fail(err)
 		}
-		fmt.Fprintf(out, "Wrote %s. Create workspace beside the policy and review the read_file rule before proxying.\n", policyPath)
+		fmt.Fprintf(out, "Wrote %s. Review server names and allowed arguments, and create workspace beside the policy before proxying.\n", policyPath)
 		return 0
 	}
 	paths, err := clientconfig.DefaultPaths()

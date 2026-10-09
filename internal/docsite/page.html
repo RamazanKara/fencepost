@@ -1,0 +1,3 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>{{.Title}} · Fencepost</title><link rel="stylesheet" href="{{.Prefix}}style.css"></head>
+<body><header><a href="{{.Prefix}}index.html">Fencepost</a><span>0.3.0 documentation</span><a href="https://github.com/RamazanKara/fencepost">Source</a></header><div class="layout"><nav aria-label="Documentation">{{$prefix := .Prefix}}{{range .Navigation}}<a href="{{$prefix}}{{.URL}}">{{.Title}}</a>{{end}}</nav><main>{{.Body}}</main></div><footer>Built locally from the repository documentation. Apache-2.0.</footer></body></html>

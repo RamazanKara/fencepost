@@ -1,0 +1,10 @@
+version: 1
+servers:
+  cloud:
+    default: deny
+    tools:
+      - name: run_command
+        action: allow
+        arguments:
+          - path: $.command
+            enum: ['aws sts get-caller-identity', 'az account show', 'gcloud config list']

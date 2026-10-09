@@ -4,7 +4,7 @@ Fencepost audits MCP servers and enforces tool-call policy between an AI agent a
 
 ## 60-second quickstart
 
-Fencepost **0.2.0**. From this checkout with Go 1.27.2, run the first command once to build the CLI; compilation and dependency downloads are setup time and may exceed a minute. The following three CLI commands are the 60-second walkthrough: create a starter policy, validate it, and explain a denied call. No MCP server or credential is needed.
+Fencepost **0.3.0**. From this checkout with Go 1.27.2, run the first command once to build the CLI; compilation and dependency downloads are setup time and may exceed a minute. The following three CLI commands are the 60-second walkthrough: create a starter policy, validate it, and explain a denied call. No MCP server or credential is needed.
 
 <!-- quickstart -->
 ```sh
@@ -35,6 +35,20 @@ fencepost pin --config ./mcp.json --update filesystem/read_file
 Exit codes: **0** for success, **1** for findings at or above `--fail-on` (default `medium`) or lock drift, **2** for invalid input or an incomplete scan. JSON and SARIF include connection errors. A failed connection never counts as a clean scan.
 
 `pin` writes `fencepost.lock` in the working directory and refuses to overwrite an existing baseline. `verify` compares launch specs and tool definitions, with unified description diffs. `pin --update server/tool` approves just that tool's change, addition, or removal. It does not approve launch changes or unrelated tool drift. Review and deliberately replace the baseline to approve launch or server changes. Keep the lockfile under version control when its descriptions are suitable for sharing; remove the root ignore entry to do so.
+
+## Vet servers and compose policies
+
+```sh
+fencepost vet npm:@modelcontextprotocol/server-filesystem
+fencepost init --pack filesystem,git --policy reviewed.yaml
+fencepost ui --config ./mcp.json --policy reviewed.yaml
+```
+
+Vetting reports package metadata, tool findings, install hooks, age, name similarity and maintainer changes against a pin baseline. Package downloads may use the network; execution is isolated where available. Without an isolation backend, a run without `--net` stops before executing package code. Windows/macOS best effort execution needs explicit `--net`. Read [vetting limits](docs/vetting.md) before running untrusted code.
+
+Review the exact server names and allowed arguments in the [starter packs](docs/packs.md). The [local console](docs/console.md) uses a private loopback URL, contains all assets in the binary, and verifies audit history before showing it. [Signed rule updates](docs/rule-updates.md) are opt-in; normal commands never download rules.
+
+`make docs` generates `site/` from this README and `docs/`. See the [local release and Pages procedure](docs/RELEASING.md).
 
 ## Team gateway
 
@@ -95,7 +109,7 @@ A denied call reaches the agent as a brief JSON-RPC error with its original ID:
 
 Changed pinned tools are hidden until reviewed and updated using the original config, for example `fencepost pin --config ./mcp.json.fencepost.bak --update filesystem/read_file`. Refresh the client's tool list afterward. Approval timeouts deny, and upstream crashes are not restarted automatically.
 
-Use `fencepost log tail`, `fencepost log verify`, and `fencepost log stats` to inspect the default `fencepost-audit.jsonl`. Keep its `.head` checkpoint alongside it. See [all policy fields and AgentWorkflows setup](docs/policy.md), [the threat model](docs/threat-model.md), and [example laptop, CI, and team policies](examples/). Filesystem and host checks constrain tool arguments; OS isolation is still needed to constrain a server's actual filesystem and network access.
+Use `fencepost log tail`, `fencepost log verify`, and `fencepost log stats` to inspect the default `fencepost-audit.jsonl`. Keep its `.head` checkpoint alongside it. See [all policy fields and AgentWorkflows setup](docs/policy.md), [the threat model](docs/threat-model.md), and [laptop](examples/developer-laptop.yaml), [CI](examples/ci-no-network.yaml), and [team](examples/team-webhook.yaml) example policies. Filesystem and host checks constrain tool arguments; OS isolation is still needed to constrain a server's actual filesystem and network access.
 
 ## Sample offline scan
 
@@ -151,7 +165,7 @@ Use environment references such as `${TOKEN}` or `${env:TOKEN}` for credentials.
 
 ## Development
 
-Requirements: Go 1.27.2, GNU Make, a C compiler for Go's race detector, and Python 3 with `jsonschema==4.26.0` for SARIF and policy schema checks. Release builds use `CGO_ENABLED=0`; the race detector's compiler requirement is only for tests. JWT validation uses `github.com/golang-jwt/jwt/v5`; other application dependencies are `gopkg.in/yaml.v3` for YAML/config locations and `golang.org/x/net/idna` (with `x/text`) for validated Unicode host normalization.
+Requirements: Go 1.27.2, GNU Make, a C compiler for Go's race detector, Node.js 22+ for local package fixtures and Playwright screenshots, and Python 3 with `jsonschema==4.26.0` for SARIF and policy schema checks. Release builds use `CGO_ENABLED=0`; the race detector's compiler requirement is only for tests. JWT validation uses `github.com/golang-jwt/jwt/v5`; other application dependencies are `gopkg.in/yaml.v3` for YAML/config locations and `golang.org/x/net/idna` (with `x/text`) for validated Unicode host normalization.
 
 ```sh
 python -m pip install jsonschema==4.26.0
@@ -171,6 +185,8 @@ go test ./internal/proxy -run '^$' -bench BenchmarkSmallCall -benchmem
 Property tests exercise policy ordering/constraints and audit-chain tampering. The opt-in soak runs with `go test -race -tags=soak ./internal/proxy -run TestSoak10Minutes -count=1 -timeout=15m -v`.
 
 Measured latency, soak results, and scope are recorded in [docs/PERF.md](docs/PERF.md).
+
+The docs builder uses Goldmark for CommonMark/GFM rendering; it is not linked into the firewall binary. `npm ci && make ui-test` uses Playwright (Chromium, or installed Edge on Windows) and writes every console view to `docs/screens/`. No frontend dependencies or CDN assets are shipped in the console.
 
 Regenerate the rule reference with `go generate ./internal/scan`. Tests check that it matches the rule registry. Verbatim descriptions captured from official reference servers, with source hashes and upstream licensing notices, are in `testdata/reference/`.
 
