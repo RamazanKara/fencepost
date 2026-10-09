@@ -1,0 +1,4035 @@
+diff --git a/.dockerignore b/.dockerignore
+index 0497b9e..de9401b 100644
+--- a/.dockerignore
++++ b/.dockerignore
+@@ -1,6 +1,10 @@
+-*
+-!Dockerfile
+-!dist/
+-dist/*
+-!dist/fencepost-*-linux-amd64
+-!dist/fencepost-*-linux-arm64
++.git
++.cache
++.tools
++.work-*
++bin
++dist
++*.patch
++*.jsonl
++*.head
++*.writing
+diff --git a/.goreleaser.yaml b/.goreleaser.yaml
+new file mode 100644
+index 0000000..e5628d8
+--- /dev/null
++++ b/.goreleaser.yaml
+@@ -0,0 +1,26 @@
++version: 2
++project_name: fencepost
++dist: dist/goreleaser
++builds:
++  - main: ./cmd/fencepost
++    binary: fencepost
++    env: [CGO_ENABLED=0]
++    goos: [linux, darwin, windows]
++    goarch: [amd64, arm64]
++    flags: [-trimpath]
++    ldflags:
++      - -s -w -X github.com/RamazanKara/fencepost/internal/version.Version=0.2.0 -X github.com/RamazanKara/fencepost/internal/version.Commit={{ .FullCommit }}{{ if .IsSnapshot }}-snapshot{{ end }} -X github.com/RamazanKara/fencepost/internal/version.Date={{ .Date }}
++archives:
++  - formats: [tar.gz]
++    format_overrides:
++      - goos: windows
++        formats: [zip]
++    files: [LICENSE, README.md]
++checksum:
++  name_template: SHA256SUMS
++snapshot:
++  version_template: 0.2.0-snapshot
++changelog:
++  disable: true
++release:
++  disable: true
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 70ed125..804b3e1 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,13 @@
+ # Changelog
+ 
++## 0.2.0 - 2026-10-09
++
++- Add an authenticated gateway for supervised stdio and remote Streamable HTTP upstreams, OIDC discovery/JWKS validation, CI keys, and identity-aware policies.
++- Load ordered policy directories or signed HTTPS policies with ETag polling; preview edits against recorded audit calls.
++- Add stdout JSON, rotating-file, OTLP logs and syslog exports, plus filtered log queries.
++- Add a team approval inbox with browser PKCE sign-in, approver/reason audit records and signed chat notifications.
++- Add local distroless image builds, Helm and Compose packaging, GoReleaser builds, and AgentWorkflows team examples.
++
+ ## 0.1.0 - 2026-10-09
+ 
+ - Enforce YAML policies over stdio and Streamable HTTP, with argument allowlists, approvals, rate/session limits, and tool pin checks.
+diff --git a/Dockerfile b/Dockerfile
+index 15942c9..1c2c214 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -1,7 +1,17 @@
+-FROM gcr.io/distroless/static-debian13:nonroot
++FROM --platform=$BUILDPLATFORM golang:1.27.2 AS build
++ARG TARGETOS
+ ARG TARGETARCH
+-ARG VERSION=0.1.0
+-COPY --chmod=0555 dist/fencepost-${VERSION}-linux-${TARGETARCH} /fencepost
++ARG VERSION=0.2.0
++WORKDIR /src
++COPY go.mod go.sum ./
++RUN go mod download
++COPY . .
++RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -ldflags="-s -w -X github.com/RamazanKara/fencepost/internal/version.Version=${VERSION}" -o /fencepost ./cmd/fencepost
++RUN mkdir /data
++
++FROM gcr.io/distroless/static-debian13:nonroot
++COPY --from=build --chmod=0555 /fencepost /fencepost
++COPY --from=build --chown=65532:65532 /data /data
+ WORKDIR /data
+ ENTRYPOINT ["/fencepost"]
+ CMD ["--help"]
+diff --git a/Makefile b/Makefile
+index f0e28bb..8ba389e 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,4 +1,4 @@
+-.PHONY: lint test e2e build release
++.PHONY: lint test e2e build release image
+ 
+ lint:
+ 	go vet ./...
+@@ -9,9 +9,13 @@ test:
+ 
+ e2e:
+ 	go test -race -tags=e2e ./cmd/fencepost ./internal/report ./internal/policy
++	go test -tags=e2e ./deploy/helm
+ 
+ build:
+ 	go run scripts/build.go
+ 
+ release:
+ 	go run scripts/build.go release
++
++image:
++	docker build -t fencepost:0.2.0 .
+diff --git a/README.md b/README.md
+index 9ed00e3..f34eaf1 100644
+--- a/README.md
++++ b/README.md
+@@ -4,7 +4,7 @@ Fencepost audits MCP servers and enforces tool-call policy between an AI agent a
+ 
+ ## 60-second quickstart
+ 
+-Fencepost **0.1.0**. From this checkout with Go 1.27.2, run the first command once to build the CLI; compilation and dependency downloads are setup time and may exceed a minute. The following three CLI commands are the 60-second walkthrough: create a starter policy, validate it, and explain a denied call. No MCP server or credential is needed.
++Fencepost **0.2.0**. From this checkout with Go 1.27.2, run the first command once to build the CLI; compilation and dependency downloads are setup time and may exceed a minute. The following three CLI commands are the 60-second walkthrough: create a starter policy, validate it, and explain a denied call. No MCP server or credential is needed.
+ 
+ <!-- quickstart -->
+ ```sh
+@@ -36,6 +36,12 @@ Exit codes: **0** for success, **1** for findings at or above `--fail-on` (defau
+ 
+ `pin` writes `fencepost.lock` in the working directory and refuses to overwrite an existing baseline. `verify` compares launch specs and tool definitions, with unified description diffs. `pin --update server/tool` approves just that tool's change, addition, or removal. It does not approve launch changes or unrelated tool drift. Review and deliberately replace the baseline to approve launch or server changes. Keep the lockfile under version control when its descriptions are suitable for sharing; remove the root ignore entry to do so.
+ 
++## Team gateway
++
++`fencepost gateway --config gateway.yaml` fronts multiple stdio and remote MCP servers at `/mcp/NAME`. It adds OIDC/OAuth resource discovery, JWKS/audience validation, CI keys, user/group/client policy rules, signed central policy updates, a team approval inbox, and audit exports.
++
++See [gateway setup and packaging](docs/gateway.md) and [AgentWorkflows integration](docs/agentworkflows.md). Preview edits with `fencepost policy test --policy ./policies --file audit.jsonl`; filter audit events with `fencepost log query --user alice`. `make image` builds the local distroless image.
++
+ ## Protect tool calls
+ 
+ Create `fencepost.yaml` next to your project. Match the server/tool names and argument names to your server. This example allows reads under `workspace`, asks before writes, and denies everything else:
+@@ -116,7 +122,7 @@ remote (testdata\home\.cursor\mcp.json)
+ | Require approval for configured calls | Share budgets across independent MCP sessions |
+ | Redact recognized secrets and flag suspected injection | Detect every secret or make untrusted output safe |
+ | Detect audit edits against a trusted checkpoint | Detect replacement of both log and checkpoint |
+-| Relay stdio and Streamable HTTP | Implement OAuth or enforce policy on all protocol methods |
++| Relay stdio and Streamable HTTP | Enforce policy on all protocol methods |
+ 
+ Read the [threat model](docs/threat-model.md) before trusting a deployment.
+ 
+@@ -139,13 +145,13 @@ Read [rule explanations and fix hints](docs/rules.md). These are review heuristi
+ 
+ The scanner targets MCP **2026-07-28** and supports **2025-11-25** initialization. It handles stdio and Streamable HTTP with JSON or SSE responses, follows list pagination, and preserves unknown definition fields. See [protocol details, limits, and config provenance](docs/PROTOCOL.md).
+ 
+-All client formats are tested with fixtures. They have not been verified against running client applications. Claude Desktop's Linux path, Claude Code's settings-file compatibility, historical VS Code settings, and Windsurf's historical path include inferred compatibility behavior. The protocol document identifies each case. OAuth, interactive inputs, deprecated separate HTTP+SSE endpoints, and dynamic config helpers are not supported in this stage.
++All client formats are tested with fixtures. They have not been verified against running client applications. Claude Desktop's Linux path, Claude Code's settings-file compatibility, historical VS Code settings, and Windsurf's historical path include inferred compatibility behavior. The protocol document identifies each case. Scanner-side OAuth, interactive inputs, deprecated separate HTTP+SSE endpoints, and dynamic config helpers remain unsupported. Gateway clients authenticate through the configured issuer; remote upstream credentials are configured separately.
+ 
+ Use environment references such as `${TOKEN}` or `${env:TOKEN}` for credentials. Reports mask known credential values as `<redacted:ENV_NAME>` and do not echo process stderr or server error bodies. Offline scanning does not resolve or expose the referenced environment values.
+ 
+ ## Development
+ 
+-Requirements: Go 1.27.2, GNU Make, a C compiler for Go's race detector, and Python 3 with `jsonschema==4.26.0` for SARIF and policy schema checks. Release builds use `CGO_ENABLED=0`; the race detector's compiler requirement is only for tests. Application dependencies are `gopkg.in/yaml.v3` for YAML/config locations and `golang.org/x/net/idna` (with `x/text`) for validated Unicode host normalization.
++Requirements: Go 1.27.2, GNU Make, a C compiler for Go's race detector, and Python 3 with `jsonschema==4.26.0` for SARIF and policy schema checks. Release builds use `CGO_ENABLED=0`; the race detector's compiler requirement is only for tests. JWT validation uses `github.com/golang-jwt/jwt/v5`; other application dependencies are `gopkg.in/yaml.v3` for YAML/config locations and `golang.org/x/net/idna` (with `x/text`) for validated Unicode host normalization.
+ 
+ ```sh
+ python -m pip install jsonschema==4.26.0
+diff --git a/cmd/fencepost/gateway.go b/cmd/fencepost/gateway.go
+new file mode 100644
+index 0000000..0a94745
+--- /dev/null
++++ b/cmd/fencepost/gateway.go
+@@ -0,0 +1,48 @@
++package main
++
++import (
++	"context"
++	"errors"
++	"flag"
++	"fmt"
++	"io"
++
++	"github.com/RamazanKara/fencepost/internal/gateway"
++)
++
++func runGateway(ctx context.Context, args []string, out, errOut io.Writer) (code int) {
++	flags := flag.NewFlagSet("gateway", flag.ContinueOnError)
++	flags.SetOutput(errOut)
++	filename := flags.String("config", "gateway.yaml", "gateway YAML configuration")
++	if err := flags.Parse(args); err != nil {
++		if errors.Is(err, flag.ErrHelp) {
++			return 0
++		}
++		return 2
++	}
++	if flags.NArg() != 0 {
++		fmt.Fprintln(errOut, "unexpected positional arguments")
++		return 2
++	}
++	c, base, err := gateway.ReadConfig(*filename)
++	if err != nil {
++		fmt.Fprintln(errOut, err)
++		return 2
++	}
++	g, err := gateway.New(ctx, c, base, out, errOut)
++	if err != nil {
++		fmt.Fprintln(errOut, err)
++		return 2
++	}
++	defer func() {
++		if err := g.Close(); err != nil {
++			fmt.Fprintln(errOut, err)
++			code = 2
++		}
++	}()
++	if err := gateway.Serve(ctx, g, errOut); err != nil {
++		fmt.Fprintln(errOut, err)
++		return 2
++	}
++	return 0
++}
+diff --git a/cmd/fencepost/gateway_e2e_test.go b/cmd/fencepost/gateway_e2e_test.go
+new file mode 100644
+index 0000000..d57ced3
+--- /dev/null
++++ b/cmd/fencepost/gateway_e2e_test.go
+@@ -0,0 +1,152 @@
++//go:build e2e
++
++package main
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"io"
++	"net"
++	"net/http"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/RamazanKara/fencepost/internal/mcp"
++	"gopkg.in/yaml.v3"
++)
++
++func TestE2EGatewayRemoteAndStdio(t *testing.T) {
++	upstream := startHTTP(t, false)
++	dir := t.TempDir()
++	key := strings.Repeat("gateway-ci-", 4)
++	t.Setenv("FENCEPOST_E2E_GATEWAY_KEY", key)
++	listener, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	address := listener.Addr().String()
++	_ = listener.Close()
++	base := "http://" + address
++	writePolicy(t, dir, map[string]any{
++		"remote": map[string]any{"default": "deny", "tools": []any{map[string]any{"name": "echo", "action": "allow", "groups": []string{"engineering"}}}},
++		"stdio":  map[string]any{"default": "deny", "tools": []any{map[string]any{"name": "echo", "action": "allow", "groups": []string{"engineering"}}, map[string]any{"name": "write", "action": "ask"}}},
++	})
++	config := map[string]any{"listen": address, "public_url": base, "policy": map[string]string{"source": "fencepost.yaml"}, "auth": map[string]any{"api_keys": []any{map[string]any{"env": "FENCEPOST_E2E_GATEWAY_KEY", "user": "ci", "client": "workflow", "groups": []string{"engineering"}}}}, "servers": map[string]any{"remote": map[string]string{"url": upstream}, "stdio": map[string]string{"command": programs["clean"]}}}
++	config["approval"] = map[string]any{"groups": []string{"engineering"}}
++	config["servers"].(map[string]any)["remote"] = map[string]any{"url": upstream, "headers": map[string]string{"Authorization": "Bearer private-http-token"}}
++	data, err := yaml.Marshal(config)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(dir, "gateway.yaml"), data, 0600); err != nil {
++		t.Fatal(err)
++	}
++	ctx, cancel := context.WithCancel(context.Background())
++	cmd := exec.CommandContext(ctx, programs["fencepost"], "gateway", "--config", "gateway.yaml")
++	cmd.Dir = dir
++	var diagnostics bytes.Buffer
++	cmd.Stderr = &diagnostics
++	if err := cmd.Start(); err != nil {
++		cancel()
++		t.Fatal(err)
++	}
++	t.Cleanup(func() {
++		cancel()
++		_ = cmd.Wait()
++		if strings.Contains(diagnostics.String(), "DATA RACE") {
++			t.Error(diagnostics.String())
++		}
++	})
++	client := &http.Client{Timeout: 10 * time.Second}
++	deadline := time.Now().Add(15 * time.Second)
++	for {
++		resp, err := client.Get(base + "/healthz")
++		if err == nil {
++			_ = resp.Body.Close()
++			if resp.StatusCode == 204 {
++				break
++			}
++		}
++		if time.Now().After(deadline) {
++			t.Fatal("gateway startup timed out")
++		}
++		time.Sleep(20 * time.Millisecond)
++	}
++	for _, server := range []string{"remote", "stdio"} {
++		for _, tool := range []string{"echo", "forbidden"} {
++			body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"` + tool + `","arguments":{"text":"gateway-ok"}}}`
++			r, _ := http.NewRequest("POST", base+"/mcp/"+server, strings.NewReader(body))
++			r.Header.Set("Authorization", "Bearer "+key)
++			r.Header.Set("Content-Type", "application/json")
++			r.Header.Set("Accept", "application/json, text/event-stream")
++			r.Header.Set("MCP-Protocol-Version", mcp.Latest)
++			resp, err := client.Do(r)
++			if err != nil {
++				t.Fatal(err)
++			}
++			data, err := io.ReadAll(resp.Body)
++			_ = resp.Body.Close()
++			if err != nil || resp.StatusCode != 200 {
++				t.Fatal(server, tool, err, resp.StatusCode, string(data))
++			}
++			if tool == "echo" && !bytes.Contains(data, []byte("gateway-ok")) {
++				t.Fatal(string(data))
++			}
++			if tool == "forbidden" && !bytes.Contains(data, []byte("does not permit")) {
++				t.Fatal(string(data))
++			}
++		}
++	}
++	callContext, cancelCall := context.WithCancel(context.Background())
++	defer cancelCall()
++	r, _ := http.NewRequestWithContext(callContext, "POST", base+"/mcp/stdio", strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"write","arguments":{}}}`))
++	r.Header.Set("Authorization", "Bearer "+key)
++	resp, err := client.Do(r)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer resp.Body.Close()
++	pendingCount := func() int {
++		t.Helper()
++		r, _ := http.NewRequest("GET", base+"/approvals/pending", nil)
++		r.Header.Set("Authorization", "Bearer "+key)
++		resp, err := client.Do(r)
++		if err != nil {
++			t.Fatal(err)
++		}
++		defer resp.Body.Close()
++		var pending []json.RawMessage
++		if err := json.NewDecoder(resp.Body).Decode(&pending); err != nil {
++			t.Fatal(err)
++		}
++		return len(pending)
++	}
++	deadline = time.Now().Add(3 * time.Second)
++	for pendingCount() == 0 {
++		if time.Now().After(deadline) {
++			t.Fatal("stdio approval not pending")
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++	cancelCall()
++	_ = resp.Body.Close()
++	deadline = time.Now().Add(3 * time.Second)
++	for pendingCount() != 0 {
++		if time.Now().After(deadline) {
++			t.Fatal("disconnected stdio call retained approval")
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++	if output := cli(t, dir, 0, "log", "query", "--tool", "write", "--decision", "allow"); output != "" {
++		t.Fatal("cancelled call allowed", output)
++	}
++	output := cli(t, dir, 0, "log", "query", "--user", "ci", "--decision", "allow")
++	if !strings.Contains(output, `"server":"stdio"`) || !strings.Contains(output, `"server":"remote"`) {
++		t.Fatal(output)
++	}
++}
+diff --git a/cmd/fencepost/main.go b/cmd/fencepost/main.go
+index efff4a6..7fc7bbd 100644
+--- a/cmd/fencepost/main.go
++++ b/cmd/fencepost/main.go
+@@ -25,11 +25,13 @@ func main() {
+ 
+ func run(ctx context.Context, args []string, out, errOut io.Writer) int {
+ 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+-		fmt.Fprintln(out, "Usage: fencepost <scan|pin|verify|proxy|wrap|unwrap|policy|approve|log|init|explain|doctor|version> [options]\n\nscan    Audit configured MCP servers (--offline, --format table|json|sarif, --fail-on low|medium|high|critical)\npin     Record trusted definitions in fencepost.lock (--update server/tool)\nverify  Reconnect and detect lockfile drift\nproxy   Enforce policy over stdio or Streamable HTTP\nwrap    Preview client config changes; --write applies with a backup\nunwrap  Preview restoring backups; --write applies\npolicy check  Validate fencepost.yaml\napprove Open a local approval channel and print its private URL\nlog tail|verify|stats  Inspect the audit log\n\ninit    Write a starter policy without prompts\nexplain Evaluate a tool-call JSON against a policy\ndoctor  Check config discovery and permissions\nversion Show version, commit, and build date\n\nUse <command> --help for options.")
++		fmt.Fprintln(out, "Usage: fencepost <scan|pin|verify|proxy|gateway|wrap|unwrap|policy|approve|log|init|explain|doctor|version> [options]\n\nscan    Audit configured MCP servers (--offline, --format table|json|sarif, --fail-on low|medium|high|critical)\npin     Record trusted definitions in fencepost.lock (--update server/tool)\nverify  Reconnect and detect lockfile drift\nproxy   Enforce policy over stdio or Streamable HTTP\ngateway Serve authenticated team MCP endpoints (--config gateway.yaml)\nwrap    Preview client config changes; --write applies with a backup\nunwrap  Preview restoring backups; --write applies\npolicy check|test  Validate policy or replay recorded calls\napprove Open a local approval channel and print its private URL\nlog tail|verify|stats|query  Inspect the audit log\n\ninit    Write a starter policy without prompts\nexplain Evaluate a tool-call JSON against a policy\ndoctor  Check config discovery and permissions\nversion Show version, commit, and build date\n\nUse <command> --help for options.")
+ 		return 0
+ 	}
+ 	command := args[0]
+ 	switch command {
++	case "gateway":
++		return runGateway(ctx, args[1:], out, errOut)
+ 	case "version", "--version":
+ 		if len(args) != 1 {
+ 			fmt.Fprintln(errOut, "version takes no arguments")
+diff --git a/cmd/fencepost/proxy.go b/cmd/fencepost/proxy.go
+index 9ce81af..6b02312 100644
+--- a/cmd/fencepost/proxy.go
++++ b/cmd/fencepost/proxy.go
+@@ -9,6 +9,7 @@ import (
+ 	"io"
+ 	"os"
+ 	"path/filepath"
++	"time"
+ 
+ 	"github.com/RamazanKara/fencepost/internal/approval"
+ 	"github.com/RamazanKara/fencepost/internal/audit"
+@@ -24,6 +25,8 @@ func runProxyCommands(ctx context.Context, args []string, out, errOut io.Writer)
+ 	policyPath, lockPath, config, server, listen, upstream, logPath := "fencepost.yaml", "fencepost.lock", "", "", "", "", "fencepost-audit.jsonl"
+ 	write, n := false, 20
+ 	subcommand := ""
++	var filter audit.Filter
++	var from, until string
+ 	if command == "policy" || command == "log" {
+ 		if len(args) < 2 {
+ 			fmt.Fprintln(errOut, "A subcommand is required.")
+@@ -51,6 +54,18 @@ func runProxyCommands(ctx context.Context, args []string, out, errOut io.Writer)
+ 	case "log":
+ 		flags.StringVar(&logPath, "file", logPath, "JSONL audit log")
+ 		flags.IntVar(&n, "n", 20, "tail line count")
++		if subcommand == "query" {
++			flags.StringVar(&filter.User, "user", "", "exact user")
++			flags.StringVar(&filter.Server, "server", "", "exact server")
++			flags.StringVar(&filter.Tool, "tool", "", "exact tool")
++			flags.StringVar(&filter.Decision, "decision", "", "exact decision")
++			flags.StringVar(&from, "from", "", "inclusive RFC3339 start")
++			flags.StringVar(&until, "until", "", "inclusive RFC3339 end")
++		}
++	case "policy":
++		if subcommand == "test" {
++			flags.StringVar(&logPath, "file", logPath, "recorded JSONL audit log")
++		}
+ 	}
+ 	if err := flags.Parse(args[1:]); err != nil {
+ 		if errors.Is(err, flag.ErrHelp) {
+@@ -64,6 +79,25 @@ func runProxyCommands(ctx context.Context, args []string, out, errOut io.Writer)
+ 	}
+ 	if command == "log" {
+ 		switch subcommand {
++		case "query":
++			for _, v := range []struct {
++				raw string
++				dst *time.Time
++			}{{from, &filter.From}, {until, &filter.Until}} {
++				if v.raw != "" {
++					parsed, err := time.Parse(time.RFC3339Nano, v.raw)
++					if err != nil {
++						return fail(errors.New("time filters require RFC3339"))
++					}
++					*v.dst = parsed
++				}
++			}
++			if !filter.From.IsZero() && !filter.Until.IsZero() && filter.From.After(filter.Until) {
++				return fail(errors.New("--from must not follow --until"))
++			}
++			if err := audit.Query(logPath, filter, out); err != nil {
++				return fail(err)
++			}
+ 		case "verify":
+ 			count, err := audit.Verify(logPath, nil)
+ 			if err != nil {
+@@ -86,7 +120,7 @@ func runProxyCommands(ctx context.Context, args []string, out, errOut io.Writer)
+ 				return fail(err)
+ 			}
+ 		default:
+-			return fail(errors.New("use log tail, verify, or stats"))
++			return fail(errors.New("use log tail, verify, stats, or query"))
+ 		}
+ 		return 0
+ 	}
+@@ -134,8 +168,16 @@ func runProxyCommands(ctx context.Context, args []string, out, errOut io.Writer)
+ 		return fail(err)
+ 	}
+ 	if command == "policy" {
++		if subcommand == "test" {
++			count, err := audit.PolicyDiff(logPath, p, out)
++			if err != nil {
++				return fail(err)
++			}
++			fmt.Fprintf(errOut, "%d changed or unknown policy decisions. Rates, budgets, pins and approvals are not replayed.\n", count)
++			return 0
++		}
+ 		if subcommand != "check" {
+-			return fail(errors.New("use policy check"))
++			return fail(errors.New("use policy check or test"))
+ 		}
+ 		fmt.Fprintln(out, "Policy is valid.")
+ 		return 0
+@@ -189,7 +231,10 @@ func runProxyCommands(ctx context.Context, args []string, out, errOut io.Writer)
+ 	if (s.URL == "") == (s.Command == "") || (listen != "" && s.URL == "") {
+ 		return fail(errors.New("choose a command after -- or an HTTP --upstream"))
+ 	}
+-	log, err := audit.Open(p.Audit.Path, p.Audit.OTLPEndpoint)
++	if p.Audit.Stdout && listen == "" {
++		return fail(errors.New("audit stdout is unavailable when stdout carries MCP frames"))
++	}
++	log, err := audit.OpenConfigured(p.Audit, out)
+ 	if err != nil {
+ 		return fail(err)
+ 	}
+diff --git a/deploy/helm/fencepost/Chart.yaml b/deploy/helm/fencepost/Chart.yaml
+new file mode 100644
+index 0000000..c5d6157
+--- /dev/null
++++ b/deploy/helm/fencepost/Chart.yaml
+@@ -0,0 +1,6 @@
++apiVersion: v2
++name: fencepost
++description: Authenticated MCP policy gateway
++type: application
++version: 0.2.0
++appVersion: "0.2.0"
+diff --git a/deploy/helm/fencepost/templates/deployment.yaml b/deploy/helm/fencepost/templates/deployment.yaml
+new file mode 100644
+index 0000000..fba9f28
+--- /dev/null
++++ b/deploy/helm/fencepost/templates/deployment.yaml
+@@ -0,0 +1,56 @@
++{{- if ne (int .Values.replicaCount) 1 }}{{ fail "Fencepost uses local sessions and audit state; replicaCount must be 1" }}{{ end }}
++apiVersion: apps/v1
++kind: Deployment
++metadata:
++  name: {{ .Release.Name }}
++spec:
++  replicas: {{ .Values.replicaCount }}
++  strategy: {type: Recreate}
++  selector:
++    matchLabels: {app.kubernetes.io/name: fencepost, app.kubernetes.io/instance: {{ .Release.Name }}}
++  template:
++    metadata:
++      labels: {app.kubernetes.io/name: fencepost, app.kubernetes.io/instance: {{ .Release.Name }}}
++    spec:
++      automountServiceAccountToken: false
++      securityContext:
++        runAsNonRoot: true
++        runAsUser: 65532
++        runAsGroup: 65532
++        fsGroup: 65532
++        seccompProfile: {type: RuntimeDefault}
++      containers:
++        - name: fencepost
++          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
++          imagePullPolicy: {{ .Values.image.pullPolicy }}
++          args: [gateway, --config, /config/gateway.yaml]
++          ports: [{name: http, containerPort: 8787}]
++          securityContext:
++            readOnlyRootFilesystem: true
++            allowPrivilegeEscalation: false
++            capabilities: {drop: [ALL]}
++          envFrom:
++            - secretRef: {name: {{ .Values.credentialsSecret }}}
++          resources:
++            {{- toYaml .Values.resources | nindent 12 }}
++          readinessProbe:
++            tcpSocket: {port: http}
++          livenessProbe:
++            tcpSocket: {port: http}
++            initialDelaySeconds: 10
++          volumeMounts:
++            - {name: config, mountPath: /config, readOnly: true}
++            - {name: data, mountPath: /data}
++            - {name: tmp, mountPath: /tmp}
++      volumes:
++        - name: config
++          secret: {secretName: {{ .Values.configSecret }}, defaultMode: 0440}
++        - name: data
++          {{- if .Values.persistence.enabled }}
++          persistentVolumeClaim:
++            claimName: {{ required "persistence.existingClaim is required" .Values.persistence.existingClaim }}
++          {{- else }}
++          emptyDir: {}
++          {{- end }}
++        - name: tmp
++          emptyDir: {sizeLimit: 32Mi}
+diff --git a/deploy/helm/fencepost/templates/networkpolicy.yaml b/deploy/helm/fencepost/templates/networkpolicy.yaml
+new file mode 100644
+index 0000000..aa69a42
+--- /dev/null
++++ b/deploy/helm/fencepost/templates/networkpolicy.yaml
+@@ -0,0 +1,18 @@
++{{- if .Values.networkPolicy.enabled }}
++apiVersion: networking.k8s.io/v1
++kind: NetworkPolicy
++metadata:
++  name: {{ .Release.Name }}
++spec:
++  podSelector:
++    matchLabels: {app.kubernetes.io/name: fencepost, app.kubernetes.io/instance: {{ .Release.Name }}}
++  policyTypes: [Ingress, Egress]
++  ingress:
++    - from:
++        - namespaceSelector:
++            {{- toYaml .Values.networkPolicy.ingressNamespaceSelector | nindent 12 }}
++      ports:
++        - {protocol: TCP, port: 8787}
++  egress:
++    {{- toYaml .Values.networkPolicy.egress | nindent 4 }}
++{{- end }}
+diff --git a/deploy/helm/fencepost/templates/service.yaml b/deploy/helm/fencepost/templates/service.yaml
+new file mode 100644
+index 0000000..6afcbb1
+--- /dev/null
++++ b/deploy/helm/fencepost/templates/service.yaml
+@@ -0,0 +1,9 @@
++apiVersion: v1
++kind: Service
++metadata:
++  name: {{ .Release.Name }}
++spec:
++  type: ClusterIP
++  selector: {app.kubernetes.io/name: fencepost, app.kubernetes.io/instance: {{ .Release.Name }}}
++  ports:
++    - {name: http, port: {{ .Values.service.port }}, targetPort: http}
+diff --git a/deploy/helm/fencepost/values.yaml b/deploy/helm/fencepost/values.yaml
+new file mode 100644
+index 0000000..fdfc721
+--- /dev/null
++++ b/deploy/helm/fencepost/values.yaml
+@@ -0,0 +1,19 @@
++replicaCount: 1
++image:
++  repository: fencepost
++  tag: "0.2.0"
++  pullPolicy: IfNotPresent
++service:
++  port: 8787
++configSecret: fencepost-config
++credentialsSecret: fencepost-credentials
++resources:
++  requests: {cpu: 100m, memory: 64Mi}
++  limits: {cpu: "1", memory: 256Mi}
++persistence:
++  enabled: false
++  existingClaim: ""
++networkPolicy:
++  enabled: false
++  ingressNamespaceSelector: {}
++  egress: []
+diff --git a/deploy/helm/helm_test.go b/deploy/helm/helm_test.go
+new file mode 100644
+index 0000000..8d5cdee
+--- /dev/null
++++ b/deploy/helm/helm_test.go
+@@ -0,0 +1,33 @@
++//go:build e2e
++
++package helm
++
++import (
++	"os/exec"
++	"strings"
++	"testing"
++)
++
++func TestHelmTemplates(t *testing.T) {
++	helm, err := exec.LookPath("helm")
++	if err != nil {
++		t.Skip("helm is not installed")
++	}
++	for _, test := range []struct {
++		name   string
++		values []string
++		want   string
++	}{
++		{"defaults", nil, "readOnlyRootFilesystem: true"},
++		{"network", []string{"--set", "networkPolicy.enabled=true"}, "kind: NetworkPolicy"},
++		{"persistent", []string{"--set", "persistence.enabled=true", "--set", "persistence.existingClaim=audit-data", "--set", "image.repository=registry.example/fencepost"}, "claimName: audit-data"},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			args := append([]string{"template", "test", "./fencepost"}, test.values...)
++			out, err := exec.Command(helm, args...).CombinedOutput()
++			if err != nil || !strings.Contains(string(out), test.want) {
++				t.Fatalf("%v\n%s", err, out)
++			}
++		})
++	}
++}
+diff --git a/docs/RELEASING.md b/docs/RELEASING.md
+index 29d3c70..6fc11c1 100644
+--- a/docs/RELEASING.md
++++ b/docs/RELEASING.md
+@@ -1,4 +1,4 @@
+-# Local release: 0.1.0
++# Local release: 0.2.0
+ 
+ GitHub Actions is unavailable for release publishing. The single CI workflow remains a convenience; local checks are the release gate.
+ 
+@@ -17,22 +17,25 @@ GitHub Actions is unavailable for release publishing. The single CI workflow rem
+    gitleaks git . --log-opts='--all --full-history' --redact
+    ```
+    Also inspect author metadata, private usernames, home directories, and machine paths, which secret detectors do not cover. Do not paste suspected live credentials into reports. These scans cover local objects/refs; fetch other refs separately if needed.
+-5. Check the dated changelog, `internal/version/version.go`, README, Dockerfile default, and release examples all say 0.1.0. Retain Apache-2.0 and upstream notices.
++5. Check the dated changelog, `internal/version/version.go`, README, Dockerfile default, and release examples all say 0.2.0. Retain Apache-2.0 and upstream notices.
+ 6. Commit the reviewed changes yourself, with no unrelated files in `dist/`, then run:
+    ```sh
+    make release
+    ```
+-   It cross-builds Linux, macOS, and Windows for amd64 and arm64 into `dist/`, writes `SHA256SUMS`, and builds local image `fencepost:0.1.0`. Version, full commit (with `-dirty` for a dirty tree), and UTC build date are embedded via ldflags. `fencepost version` displays them. The container uses the matching Linux binary for Docker's native architecture. Unexpected old release files in `dist/` are rejected; move them aside before rebuilding. A Docker failure leaves the six binaries and checksums available but fails the release target.
+-7. Verify checksums with `cd dist` then `sha256sum -c SHA256SUMS`, or PowerShell `Get-FileHash`. Smoke-test the native binary and `docker run --rm fencepost:0.1.0 version`. Cross-compilation alone does not verify execution on all six platforms.
++   It cross-builds Linux, macOS, and Windows for amd64 and arm64 into `dist/`, writes `SHA256SUMS`, and builds local image `fencepost:0.2.0`. Version, full commit (with `-dirty` for a dirty tree), and UTC build date are embedded via ldflags. `fencepost version` displays them. The image builds the same source for Docker's native architecture and embeds the release version. Unexpected old release files in `dist/` are rejected; move them aside before rebuilding. A Docker failure leaves the six binaries and checksums available but fails the release target.
++7. Verify checksums with `cd dist` then `sha256sum -c SHA256SUMS`, or PowerShell `Get-FileHash`. Smoke-test the native binary and `docker run --rm fencepost:0.2.0 version`. Cross-compilation alone does not verify execution on all six platforms.
+ 
+-Create and push the intended `v0.1.0` tag yourself after review. With that tag available remotely, publish explicitly:
++Create and push the intended `v0.2.0` tag yourself after review. With that tag available remotely, publish explicitly:
+ 
+ ```sh
+-gh release create v0.1.0 dist/* --notes-file CHANGELOG.md --verify-tag
++gh release create v0.2.0 dist/* --notes-file CHANGELOG.md --verify-tag
+ ```
+ 
+ PowerShell does not expand wildcards for native applications; pass `(Get-ChildItem dist -File).FullName` in place of `dist/*`. Nothing in `make release` tags, commits, pushes, uploads, or calls `gh`.
+ 
+-The distroless image runs as a non-root user and includes no shell or MCP server executables. Mount a reviewed policy and a writable `/data` directory for audit/approval state. Executables for stdio servers must be supplied separately; the image also supports offline scans and remote-server configurations. The HTTP listener remains loopback-only inside the container.
++The distroless image runs as a non-root user and includes no shell or MCP server executables. Mount a reviewed policy and a writable `/data` directory for audit/approval state. Executables for stdio servers must be supplied separately; the image also supports offline scans and remote-server configurations. Gateway mode may bind a private container interface; terminate HTTPS and restrict backend access as described in gateway.md.
+ 
+-On a runner with an unwritable Go module cache, automatic VCS metadata discovery can repeatedly fail and delay fixture builds. Prefer a writable cache. For local checks, `GOFLAGS=-buildvcs=false` disables that optional Go build-info lookup. Fencepost's version, commit, and date are still explicitly embedded by the release script. On this Windows laptop the serialized rerun used `$env:GOFLAGS='-buildvcs=false -p=1'` and `$env:GOMAXPROCS='4'` to limit concurrent builds and tests. The first default e2e attempt timed out while building fixtures, before CLI tests ran; another parallel unit run hit existing HTTP negotiation and approval deadlines. The serialized unit run still timed out in `TestPendingApprovalAndSessionGrant`; the complete e2e rerun passed. See [PERF.md](PERF.md) for results and remaining release blockers, and keep these environment limits with the test results when comparing runs.
++On a runner with an unwritable Go module cache, automatic VCS metadata discovery can repeatedly fail and delay fixture builds. Prefer a writable cache. For local checks, `GOFLAGS=-buildvcs=false` disables that optional Go build-info lookup. Fencepost's version, commit, and date are still explicitly embedded by the release script. During v0.1.0 verification on this Windows laptop, the serialized rerun used `$env:GOFLAGS='-buildvcs=false -p=1'` and `$env:GOMAXPROCS='4'` to limit concurrent builds and tests. The first default e2e attempt timed out while building fixtures, before CLI tests ran; another parallel unit run hit existing HTTP negotiation and approval deadlines. The serialized unit run still timed out in `TestPendingApprovalAndSessionGrant`; the complete e2e rerun passed. See [PERF.md](PERF.md) for results and remaining release blockers, and keep these environment limits with the test results when comparing runs.
++
++
++For a local GoReleaser build without publishing, install GoReleaser and run `goreleaser build --snapshot --clean`. The six binaries go under `dist/goreleaser`; the snapshot marks commit metadata accordingly. To produce local archives and checksums, run `goreleaser release --snapshot --clean --skip=publish`. Publishing is disabled in the repository configuration. `make image` independently builds `fencepost:0.2.0`; no registry is required except to pull the public builder/base images. Upload/tag/push only when separately authorized.
+diff --git a/docs/agentworkflows.md b/docs/agentworkflows.md
+new file mode 100644
+index 0000000..38b3896
+--- /dev/null
++++ b/docs/agentworkflows.md
+@@ -0,0 +1,19 @@
++# AgentWorkflows through Fencepost
++
++Register Fencepost as the team's MCP server in AgentWorkflows so both products apply their policies:
++
++`agent → context.tool → AgentWorkflows gateway → Fencepost /mcp/NAME → upstream`
++
++The [example agent](../examples/agentworkflows/agent.py) uses the existing `GatewayActivities` and `context.tool` APIs. Register `activities.call` on the Temporal worker and invoke `WorkflowGateway().agent("briefing", {"topic": "release notes"})` from its workflow. Set `AGENTWORKFLOWS_GATEWAY_URL` and `AGENTWORKFLOWS_API_KEY` in the worker.
++
++1. Adapt [gateway.yaml](../examples/agentworkflows/gateway.yaml), [policy.yaml](../examples/agentworkflows/policy.yaml), and the upstream URLs. Start `fencepost gateway --config gateway.yaml` behind HTTPS.
++2. Generate separate random secrets of at least 32 bytes for `RESEARCH_MCP_TOKEN` and `SUPPORT_MCP_TOKEN`. Set them in Fencepost and in the **AgentWorkflows gateway** environment. Keep them out of agent arguments and workflow history.
++3. Merge [sandbox-policy.yaml](../examples/agentworkflows/sandbox-policy.yaml) into the research team's existing `SandboxPolicySet`. The tool is `documents.echo`, and its registered origin is Fencepost. For support, register `tickets.echo` with `SUPPORT_MCP_TOKEN` and the support team's workflow allowlist.
++4. Research calls to documents allow; calls to tickets deny. Support calls to tickets wait in the [approval inbox](gateway.md#approval-inbox). Sign in with a member of `tool-approvers` and record a reason.
++5. Inspect `fencepost log query --user research-worker --server documents` and AgentWorkflows' run-linked tool receipts.
++
++Fencepost derives groups and client names from the configured key or signed issuer claims. Payload fields, initialization client names, and forwarded headers cannot grant group membership. A service key identifies a team worker, not the human initiating a run. Per-human identity requires resource-scoped OAuth tokens; this example uses team service keys because AgentWorkflows' registry accepts credentials through `credentialEnv`.
++
++AgentWorkflows' current MCP adapter negotiates **2025-03-26**. Fencepost relays that initialization; use upstreams supporting that revision. The Compose echo servers support it. Fencepost does not translate arbitrary revisions. AgentWorkflows' tool costs, egress policies, retries and receipts still apply. Use upstream idempotency handling for writes; Fencepost does not make retries idempotent.
++
++The examples follow the local AgentWorkflows SDK and registry documentation. A full deployment against Temporal, an external issuer and AgentWorkflows is not covered by Fencepost's tests. References: [MCP registry and agent callbacks](https://github.com/RamazanKara/agentworkflows/blob/main/docs/workflows.md#mcp-tools), [SDK reference](https://github.com/RamazanKara/agentworkflows/blob/main/docs/sdk-reference.md).
+diff --git a/docs/gateway.md b/docs/gateway.md
+new file mode 100644
+index 0000000..1890a9d
+--- /dev/null
++++ b/docs/gateway.md
+@@ -0,0 +1,122 @@
++# Team gateway
++
++`fencepost gateway --config gateway.yaml` serves `/mcp/NAME` for each upstream. It supervises a separate stdio process per authenticated user/client/group set and server, or relays Streamable HTTP. Crashed processes fail their calls and are not automatically restarted. Idle connections expire after 30 minutes when new traffic arrives; at most 256 identity/server connections are retained. Restart resets in-memory sessions, approvals and budgets.
++
++Use an HTTPS reverse proxy in production. Bind the backend to a private interface and preserve the configured Host. Fencepost checks Host and Origin against `public_url`; forwarded identity headers are not trusted. Health is available at `/healthz` with that Host. The listener itself is HTTP. Restrict direct access to the backend and upstreams.
++
++```yaml
++listen: 127.0.0.1:8787
++public_url: https://tools.example.com
++policy:
++  source: ./policies
++  poll_interval: 1m
++lock: ./fencepost.lock
++auth:
++  issuer: https://identity.example.com
++  client_names:
++    workflow-client-id: agentworkflows
++  browser_client_id: fencepost-inbox
++  browser_secret_env: FENCEPOST_INBOX_SECRET
++  api_keys:
++    - env: FENCEPOST_CI_KEY
++      user: ci
++      groups: [engineering]
++      client: build
++approval:
++  groups: [tool-approvers]
++servers:
++  filesystem:
++    command: /opt/mcp/filesystem
++    args: [/workspace]
++    env: {}
++  remote:
++    url: https://remote.example.com/mcp
++    headers:
++      Authorization: Bearer ${REMOTE_MCP_TOKEN}
++```
++
++Stdio receives the existing clean environment plus explicit `env`. Relative policy, lock and cwd paths resolve beside the gateway config. Pin direct upstreams before deployment. Remote credentials are separate configured credentials; user access tokens and cookies are stripped. Upstream environment references use the existing client-config resolver.
++
++## Sign-in and identity
++
++Fencepost is the OAuth protected resource; the issuer handles sign-in, consent and token issuance. MCP clients discover `/.well-known/oauth-protected-resource/mcp/NAME` through the 401 `WWW-Authenticate` challenge. Configure JWT **access tokens** with the full server URL in `aud`. Every request sends `Authorization: Bearer TOKEN`; query-string tokens are rejected.
++
++OIDC discovery must name exactly the configured issuer and provide JWKS. RS256 (RSA ≥2048 bits), ES256 and EdDSA/Ed25519 are accepted. Signature, issuer, audience, required expiry, not-before and issued-at are checked. JWKS is cached for five minutes; unknown keys can trigger a rate-limited refresh. Invalid tokens receive 401. Opaque tokens/introspection are not supported.
++
++`sub` is the user, `groups` a string array, and `client_id` (or `azp`) the client. `client_names` maps trusted IDs to policy names. Initialization's client name is descriptive only. The issuer must control group claims and issue tokens for these resources.
++
++CI keys require at least 32 bytes from the named environment variable and explicit user/client. They use the Bearer header with constant-time hash comparison. Configure separate keys per team and restart after rotation. They are service identities.
++
++See the [MCP authorization specification](https://modelcontextprotocol.io/specification/latest/basic/authorization). The client's OAuth flow and issuer registration/consent settings remain their responsibilities.
++
++## Central policy
++
++`policy.source` accepts a YAML file, directory, or HTTPS URL. Directories merge immediate `.yaml`/`.yml` files in lexical filename order. Maps merge recursively; later scalars and lists replace earlier values, including complete tool lists. Paths are relative to the directory. The final policy is strictly validated. `policy check --policy DIR` and `policy test --policy DIR --file audit.jsonl` use the same merge.
++
++For remote policy, configure `public_key` as base64 of the 32-byte Ed25519 public key. The publisher returns `X-Fencepost-Signature` as base64 of the Ed25519 signature over **exact response bytes**, plus optional ETag. Polls send `If-None-Match`; 304 retains policy. Redirects, invalid signatures, oversized responses and invalid policies reject. Startup requires valid policy; refresh errors retain the last verified policy and report on stderr. Relative remote-policy paths resolve beside gateway config. HTTPS uses the system trust store.
++
++Files/directories are polled too. Rules change on existing connections at the next check; pending approvals deny if policy changes. Unchanged content preserves approval state. Audit destinations open at startup: restart to change export settings. Signatures authenticate content but do not prevent replay of an older signed policy.
++
++Tool rules support exact `users`, `groups`, `clients` lists. Each present list must be nonempty. Values within a list are ORed; lists are ANDed with the tool name. A nonmatching identity continues to the next rule. Use `default: deny`.
++
++```yaml
++version: 1
++servers:
++  remote:
++    default: deny
++    tools:
++      - {name: read_*, action: allow, groups: [engineering], clients: [agentworkflows]}
++```
++
++## Approval inbox
++
++Open `/approvals`. Register `PUBLIC_URL/callback` as the browser client's exact redirect URI. Enable authorization code with PKCE S256 and `openid`; issue its access tokens for `PUBLIC_URL/approvals`. Confidential clients use `browser_secret_env`; omit for registered public clients.
++
++Sign-in uses browser-bound state, single-use callbacks, PKCE, issuer-response checks and HttpOnly SameSite cookies (Secure over HTTPS). Access tokens stay server-side and are revalidated on inbox requests. Only configured approver groups may view/decide. Approval POSTs require CSRF and a reason. The audit records approver and reason; competing decisions cannot approve twice. Timeouts deny. The page retains the last 256 completed requests; attribution remains in the audit.
++
++Optional `approval.webhook_url` and `hmac_secret_env` send pending requests and an inbox URL to a chat bridge. Validate the HMAC-SHA256 `X-Fencepost-Signature` over the body, timestamp and nonce. This is notification only: responses cannot approve. Failed delivery is audited; requests still expire. Gateway asks use the inbox; standalone proxy approval behavior is unchanged.
++
++## Audit export and policy dry runs
++
++The authoritative chain and checkpoint remain required. Exports are bounded, best-effort copies; overflow/delivery failures are reported at shutdown.
++
++```yaml
++audit:
++  path: /data/audit.jsonl
++  stdout: true
++  export_file: /data/export.jsonl
++  max_bytes: 10485760
++  backups: 5
++  otlp_logs_endpoint: https://collector.example.com/v1/logs
++  syslog: tls://logs.example.com:6514
++  record_arguments: false
++```
++
++Exports carry complete JSON audit records. Rotation retains numbered backups without rotating the authoritative chain. Use one writer per export file. Syslog supports UDP, TCP with octet counting, and TLS with system certificate verification. UDP is unencrypted and large records can exceed its datagram limit. Existing `otlp_endpoint` trace exports remain supported. OTLP has no custom auth headers.
++
++```sh
++fencepost log query --file /data/audit.jsonl --user alice --server remote --tool read_file --decision allow --from 2026-10-09T00:00:00Z --until 2026-10-10T00:00:00Z
++fencepost policy test --policy ./policies --file /data/audit.jsonl
++```
++
++Query filters are exact; time bounds inclusive. Both commands verify chain/checkpoint before output. Policy tests emit JSONL before/after changes and unknown evaluations, never invoke tools or change state. Exit 0 means the dry run completed (including changes); invalid input/logs return 2.
++
++Arguments are omitted by default. Opt-in `record_arguments` stores sanitized arguments up to 16 KiB. This increases retained sensitive data; redaction is heuristic. Missing/redacted/oversized arguments produce unknown results where exact replay is impossible. Static decisions are recorded separately from approval outcomes. Rates, budgets, live pins and approvals are not simulated.
++
++## Local packaging
++
++`make image` builds `fencepost:0.2.0` locally with Docker/Linux containers and registry access to Go/distroless bases. It never pushes. The image has no shell or stdio executables; supply reviewed binaries or remote upstreams.
++
++Set a random `FENCEPOST_CI_KEY` of at least 32 bytes and run `docker compose -f examples/gateway/docker-compose.yaml up --build`. Two echo servers share the gateway's network namespace and bind loopback. Call `http://127.0.0.1:8787/mcp/documents` with the key. Ticket calls intentionally ask; configure OIDC and an approver group to allow them. Audit persists in a named volume.
++
++For `deploy/helm/fencepost`, load the local image into the cluster or configure your own registry image. Create `fencepost-config` Secret with `gateway.yaml`, policy and optional lock, and `fencepost-credentials` for environment secrets. Set `listen: 0.0.0.0:8787`, HTTPS `public_url`, and audit paths under `/data`.
++
++```sh
++helm template fencepost deploy/helm/fencepost
++helm template fencepost deploy/helm/fencepost --set networkPolicy.enabled=true
++helm template fencepost deploy/helm/fencepost --set persistence.enabled=true --set persistence.existingClaim=fencepost-audit
++```
++
++The chart runs non-root, with read-only root filesystem, dropped capabilities and no service-account token. Default storage is ephemeral; use an existing PVC for retention. NetworkPolicy is opt-in with no default egress: explicitly allow DNS, issuer/JWKS, policy, collectors and upstreams. Supply HTTPS Ingress separately. Multiple replicas are rejected because sessions and the inbox are local.
++
++See [AgentWorkflows integration](agentworkflows.md) for per-team registrations.
+diff --git a/docs/policy.md b/docs/policy.md
+index 2f1c5a9..f601311 100644
+--- a/docs/policy.md
++++ b/docs/policy.md
+@@ -1,5 +1,7 @@
+ # Policy proxy
+ 
++For authenticated multi-server operation, central sources, identity rules, team approvals and audit exports, see [the gateway guide](gateway.md).
++
+ `fencepost proxy` applies a version 1 YAML policy to MCP tool calls. It requires a policy file; missing or invalid policy is an error. `fencepost policy check --policy fencepost.yaml` checks field names, types, actions, globs, regular expressions, JSON paths, timeouts, and endpoint restrictions. [The JSON Schema](../schema/policy.schema.json) supports editor validation; runtime checking additionally validates Go regex syntax, glob syntax, IDNs, and timeout bounds. Unknown servers are denied. Only `tools/call` is subject to tool permissions; protocol discovery, prompts, resources, and client capabilities remain available.
+ 
+ ```yaml
+@@ -110,7 +112,7 @@ Use the backup config here so pinning connects directly to the original server.
+ 
+ ## Approval channel
+ 
+-Run `fencepost approve --policy fencepost.yaml`. It binds a literal loopback address, chooses a random port, writes the local descriptor, and prints a URL containing a random 256-bit token. Open that private URL in a browser. `--listen 127.0.0.1:8790` selects a fixed loopback port. Non-loopback and hostname listen addresses are rejected.
++In standalone proxy mode, run `fencepost approve --policy fencepost.yaml`. It binds a literal loopback address, chooses a random port, writes the local descriptor, and prints a URL containing a random 256-bit token. Open that private URL in a browser. `--listen 127.0.0.1:8790` selects a fixed loopback port. Non-loopback and hostname listen addresses are rejected.
+ 
+ The page shows server, tool, and sanitized arguments with **Approve once**, **Always for this session**, and **Deny**. An always grant applies to that tool in that session; it does not bypass argument rules, pins, rate limits, or budget. The proxy denies on timeout, cancellation, a missing channel, malformed answers, or connection errors. Argument constraints are checked again after approval. The page escapes untrusted text, checks the Host and Origin headers, authenticates every route, and disables caching and framing. The descriptor is removed on orderly shutdown. After an abrupt termination, remove a stale descriptor before restarting the approval service.
+ 
+@@ -135,7 +137,7 @@ Respond with HTTP 200 and `{"decision":"allow"}` or `{"decision":"deny"}`. Sign
+ 
+ Each JSONL record holds a sequence number, previous hash, sanitized event, and SHA-256 hash of the exact encoded entry. The checkpoint at `<log>.head` records final hash, count, and file size, making tail deletion detectable as well as edits, internal deletions, and reordering. Keep the log and checkpoint together. `<log>.writing` is the persistent OS lock file; locks release automatically when a process exits. Do not delete or replace these files while proxies are running.
+ 
+-Audit entries contain time, session, server, method, tool, decision, matched rule identifiers, and redaction counts. They do not contain arguments, result bodies, credentials, or upstream error bodies. Writes reach the operating system before forwarding an allowed call; orderly shutdown also syncs the files. Sudden power loss can leave a torn final entry/checkpoint, which verification rejects. A hash chain is not an authenticated signature: someone who can replace both log and checkpoint can forge history. Anchor the final hash outside that trust boundary for stronger evidence.
++Audit entries contain time, session, server, method, tool, decision, matched rule identifiers, and redaction counts. They omit arguments by default and never contain result bodies or upstream error bodies. Opt-in `audit.record_arguments` records sanitized arguments for policy replay; see the gateway guide for retention and replay limits. Writes reach the operating system before forwarding an allowed call; orderly shutdown also syncs the files. Sudden power loss can leave a torn final entry/checkpoint, which verification rejects. A hash chain is not an authenticated signature: someone who can replace both log and checkpoint can forge history. Anchor the final hash outside that trust boundary for stronger evidence.
+ 
+ ```sh
+ fencepost log tail --file fencepost-audit.jsonl --n 20
+diff --git a/docs/threat-model.md b/docs/threat-model.md
+index 323c318..b4bc917 100644
+--- a/docs/threat-model.md
++++ b/docs/threat-model.md
+@@ -1,6 +1,6 @@
+ # Threat model
+ 
+-Fencepost sits between a local MCP client and a configured server. It assumes the client actually routes its MCP traffic through the proxy and that the policy, binary, lockfile, original config/backup, and approval channel are controlled by the operator. Tool arguments, server definitions, server results, and upstream error messages are untrusted.
++Fencepost sits between MCP clients and configured servers. It assumes the client actually routes its MCP traffic through the proxy and that the policy, binary, lockfile, original config/backup, and approval channel are controlled by the operator. Tool arguments, server definitions, server results, and upstream error messages are untrusted.
+ 
+ ## What it enforces
+ 
+@@ -8,7 +8,7 @@ Fencepost sits between a local MCP client and a configured server. It assumes th
+ - Filesystem argument rules check resolved path containment and reject traversal, links outside the allowed root, encoded paths, and ambiguous Windows paths. URL argument rules parse the URL, validate IDNs, require exact host membership, and reject misleading userinfo and numeric IP representations.
+ - A locked tool remains unavailable until the client lists a definition matching the baseline. List-change notifications revoke previous trust. This catches an advertised rug pull; the tool hash is not a code signature.
+ - Output rules redact recognized secret patterns, replace oversized tool results, and visibly warn about detected prompt injection or block it. The original suspicious content stays visible after a warning unless a size cap also applies.
+-- Every accepted protocol message and tool decision is audited without argument/result bodies. A checkpoint plus hash chain detects edited, missing, reordered, and truncated entries as long as the checkpoint is trusted.
++- Every accepted protocol message and tool decision is audited. Arguments are omitted unless sanitized recording is explicitly enabled for replay; results are never recorded. A checkpoint plus hash chain detects edited, missing, reordered, and truncated entries as long as the checkpoint is trusted.
+ - Local approval uses a random URL token, loopback binding, Host/Origin checks, escaped text, and timeouts. Webhook decisions require request/response HMAC signatures. Missing approvals deny.
+ 
+ ## What it does not enforce
+@@ -23,7 +23,7 @@ FP001 and FP005 are heuristics. Obfuscated, encoded, fragmented, novel, or very
+ 
+ The baseline covers advertised tool definitions. A server can change implementation without changing the hash, or conceal drift until its next list response. The proxy does not poll tools on every call or attest the executable; scanner `verify` remains responsible for launch-spec drift. Protect and review lock updates.
+ 
+-The HTTP proxy and approval service are for local use. Other processes running as the same user can usually read config, approval descriptors, and audit files or invoke servers directly. Windows uses the containing directory's ACLs; Unix uses restrictive file modes for newly created sensitive files. Local administrators are outside the boundary. This is not a multi-tenant authentication or authorization service.
++The standalone HTTP proxy and local approval service are for local use. Other processes running as the same user can usually read config, approval descriptors, and audit files or invoke servers directly. Windows uses the containing directory's ACLs; Unix uses restrictive file modes for newly created sensitive files. Local administrators are outside the boundary. Gateway mode adds issuer-validated user/group/client identity and isolated transport state; it does not isolate upstream processes at the OS level.
+ 
+ Budgets and approvals last for one proxied MCP session. Starting another process or a new legacy HTTP session starts new counters. Modern stateless HTTP shares the listener's lifetime budget. Independent wrapped servers do not share an agent-conversation identity. No billing-grade or organization-wide accounting is claimed.
+ 
+@@ -34,3 +34,16 @@ Protocol frames/SSE events, pending requests, HTTP sessions, and local approvals
+ ## Operational assumptions
+ 
+ Pin direct servers before wrapping. Keep policy and audit paths outside directories writable by an untrusted server where possible. Use least-privilege approval operators and a webhook receiver that validates freshness/nonces as well as signatures. Keep original backups private, because they may contain credentials. Review policy denies, injection warnings, and drift rather than automatically approving them. A passing scanner or proxy test is not a claim that an arbitrary MCP server is trustworthy.
++
++
++## Gateway trust boundary
++
++Deploy the gateway behind HTTPS on a trusted private backend, with Host preserved and direct upstream access restricted. Only configured issuers/JWKS and configured static keys establish identity. Client initialization names and forwarding headers cannot grant identity. Issuers must control group claims; access tokens require the exact per-server audience and expiry. User tokens are never forwarded upstream. Static keys identify service users, and key/issuer configuration changes require restart.
++
++Browser approval uses PKCE, state bound to a browser cookie, single-use callbacks, issuer-response validation, CSRF checks and configured approver groups. Approval reasons and identity are audited; group members can approve other users' calls. Notifications expose sanitized pending arguments to the configured chat bridge. Redaction is heuristic.
++
++Central policy refreshes atomically replace validated policy. Fetch, signature or parse failures retain the last known good policy, so an outage can delay revocation. Ed25519 authenticates the bytes but does not prevent rollback to an older signed document. Secure signing keys and the publisher. Runtime audit destinations are fixed until restart.
++
++Gateway budgets and approvals remain local to identity/server transport sessions. They are not shared across replicas or restarts; token/group changes can create new transport state. The Helm chart requires one replica. Stdio processes run with the gateway's OS privileges and are not a tenant sandbox. Deploy separate gateways/containers when teams require OS isolation.
++
++Audit exports are bounded and best effort; the local chain/checkpoint remain authoritative. Rotated export files have no separate checkpoints. Opt-in argument recording may retain sensitive information the redactor misses; replay reports unknown where arguments are unavailable or altered. Restrict log access and retention. TLS syslog is preferable outside a trusted network.
+diff --git a/examples/agentworkflows/agent.py b/examples/agentworkflows/agent.py
+new file mode 100644
+index 0000000..34aa646
+--- /dev/null
++++ b/examples/agentworkflows/agent.py
+@@ -0,0 +1,14 @@
++import os
++
++from agentworkflows.activities import GatewayActivities
++
++
++async def briefing(context, arguments):
++    return await context.tool("documents.echo", {"text": arguments["topic"]})
++
++
++activities = GatewayActivities(
++    os.environ["AGENTWORKFLOWS_GATEWAY_URL"],
++    os.environ["AGENTWORKFLOWS_API_KEY"],
++    agents={"briefing": briefing},
++)
+diff --git a/examples/agentworkflows/gateway.yaml b/examples/agentworkflows/gateway.yaml
+new file mode 100644
+index 0000000..5735568
+--- /dev/null
++++ b/examples/agentworkflows/gateway.yaml
+@@ -0,0 +1,25 @@
++listen: 0.0.0.0:8787
++public_url: https://fencepost.example.com
++policy:
++  source: policy.yaml
++auth:
++  api_keys:
++    - env: RESEARCH_MCP_TOKEN
++      user: research-worker
++      groups: [research-team]
++      client: agentworkflows
++    - env: SUPPORT_MCP_TOKEN
++      user: support-worker
++      groups: [support-team]
++      client: agentworkflows
++  issuer: https://id.example.com
++  browser_client_id: fencepost-inbox
++  client_names:
++    fencepost-inbox: approval-inbox
++approval:
++  groups: [tool-approvers]
++servers:
++  documents:
++    url: https://documents.example.com/mcp
++  tickets:
++    url: https://tickets.example.com/mcp
+diff --git a/examples/agentworkflows/policy.yaml b/examples/agentworkflows/policy.yaml
+new file mode 100644
+index 0000000..fbedf8c
+--- /dev/null
++++ b/examples/agentworkflows/policy.yaml
+@@ -0,0 +1,12 @@
++version: 1
++servers:
++  documents:
++    default: deny
++    tools:
++      - {name: echo, action: allow, groups: [research-team], clients: [agentworkflows]}
++  tickets:
++    default: deny
++    tools:
++      - {name: echo, action: ask, groups: [support-team], clients: [agentworkflows]}
++audit:
++  path: /data/audit.jsonl
+diff --git a/examples/agentworkflows/sandbox-policy.yaml b/examples/agentworkflows/sandbox-policy.yaml
+new file mode 100644
+index 0000000..e60d518
+--- /dev/null
++++ b/examples/agentworkflows/sandbox-policy.yaml
+@@ -0,0 +1,16 @@
++# Merge each entry into the corresponding AgentWorkflows SandboxPolicySet.
++sandboxId: research-team
++mcpServers:
++  documents:
++    url: https://fencepost.example.com/mcp/documents
++    credentialEnv: RESEARCH_MCP_TOKEN
++    tools:
++      echo: 0.01
++workflows:
++  Briefing:
++    allowedProviders: []
++    allowedModels: []
++    allowedTools: [documents.echo]
++    allowedEgress: [https://fencepost.example.com]
++    tokenLimit: 1000
++    costLimitUsd: 1
+diff --git a/examples/gateway/docker-compose.yaml b/examples/gateway/docker-compose.yaml
+new file mode 100644
+index 0000000..740d875
+--- /dev/null
++++ b/examples/gateway/docker-compose.yaml
+@@ -0,0 +1,38 @@
++services:
++  gateway:
++    build:
++      context: ../..
++    image: fencepost:0.2.0
++    command: [gateway, --config, /config/gateway.yaml]
++    user: "65532:65532"
++    read_only: true
++    cap_drop: [ALL]
++    security_opt: [no-new-privileges:true]
++    ports: ["127.0.0.1:8787:8787"]
++    environment:
++      FENCEPOST_CI_KEY: ${FENCEPOST_CI_KEY:?Set a random CI key of at least 32 bytes}
++    volumes:
++      - ./gateway.yaml:/config/gateway.yaml:ro
++      - ./policy.yaml:/config/policy.yaml:ro
++      - audit:/data
++    tmpfs: [/tmp]
++  documents:
++    build:
++      context: ../..
++      dockerfile: examples/gateway/upstream.Dockerfile
++    network_mode: service:gateway
++    command: [--listen, "127.0.0.1:9001"]
++    user: "65532:65532"
++    read_only: true
++    cap_drop: [ALL]
++  tickets:
++    build:
++      context: ../..
++      dockerfile: examples/gateway/upstream.Dockerfile
++    network_mode: service:gateway
++    command: [--listen, "127.0.0.1:9002"]
++    user: "65532:65532"
++    read_only: true
++    cap_drop: [ALL]
++volumes:
++  audit:
+diff --git a/examples/gateway/gateway.yaml b/examples/gateway/gateway.yaml
+new file mode 100644
+index 0000000..98efdd8
+--- /dev/null
++++ b/examples/gateway/gateway.yaml
+@@ -0,0 +1,17 @@
++listen: 0.0.0.0:8787
++public_url: http://127.0.0.1:8787
++policy:
++  source: policy.yaml
++auth:
++  api_keys:
++    - env: FENCEPOST_CI_KEY
++      user: ci-agent
++      groups: [engineering]
++      client: agentworkflows
++approval:
++  groups: [approvers]
++servers:
++  documents:
++    url: http://127.0.0.1:9001/mcp
++  tickets:
++    url: http://127.0.0.1:9002/mcp
+diff --git a/examples/gateway/policy.yaml b/examples/gateway/policy.yaml
+new file mode 100644
+index 0000000..ee1f759
+--- /dev/null
++++ b/examples/gateway/policy.yaml
+@@ -0,0 +1,13 @@
++version: 1
++servers:
++  documents:
++    default: deny
++    tools:
++      - {name: echo, action: allow, groups: [engineering], clients: [agentworkflows]}
++  tickets:
++    default: deny
++    tools:
++      - {name: echo, action: ask, groups: [engineering]}
++audit:
++  path: /data/audit.jsonl
++  stdout: true
+diff --git a/examples/gateway/upstream/main.go b/examples/gateway/upstream/main.go
+new file mode 100644
+index 0000000..8447ed8
+--- /dev/null
++++ b/examples/gateway/upstream/main.go
+@@ -0,0 +1,61 @@
++package main
++
++import (
++	"encoding/json"
++	"flag"
++	"log"
++	"net/http"
++	"time"
++)
++
++func main() {
++	listen := flag.String("listen", "127.0.0.1:9001", "listen address")
++	flag.Parse()
++	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.URL.Path != "/mcp" || r.Method != "POST" {
++			w.WriteHeader(405)
++			return
++		}
++		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
++		var m struct {
++			ID     json.RawMessage `json:"id"`
++			Method string          `json:"method"`
++			Params struct {
++				Arguments       map[string]any `json:"arguments"`
++				ProtocolVersion string         `json:"protocolVersion"`
++			} `json:"params"`
++		}
++		if json.NewDecoder(r.Body).Decode(&m) != nil {
++			w.WriteHeader(400)
++			return
++		}
++		if m.ID == nil {
++			w.WriteHeader(202)
++			return
++		}
++		result := map[string]any{}
++		switch m.Method {
++		case "server/discover":
++			result = map[string]any{"supportedVersions": []string{"2026-07-28"}, "capabilities": map[string]any{"tools": map[string]any{}}, "ttlMs": 0, "cacheScope": "private"}
++		case "initialize":
++			version := "2025-11-25"
++			if m.Params.ProtocolVersion == "2025-03-26" {
++				version = m.Params.ProtocolVersion
++			}
++			result = map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]string{"name": "example", "version": "0.2.0"}}
++		case "tools/list":
++			result["tools"] = []any{map[string]any{"name": "echo", "description": "Echo example text.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"text": map[string]string{"type": "string"}}}}}
++		case "tools/call":
++			text, _ := m.Params.Arguments["text"].(string)
++			result["content"] = []any{map[string]string{"type": "text", "text": text}}
++		default:
++			w.Header().Set("Content-Type", "application/json")
++			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": m.ID, "error": map[string]any{"code": -32601, "message": "Unknown method"}})
++			return
++		}
++		w.Header().Set("Content-Type", "application/json")
++		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": result})
++	})
++	server := &http.Server{Addr: *listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
++	log.Fatal(server.ListenAndServe())
++}
+diff --git a/examples/gateway/upstream.Dockerfile b/examples/gateway/upstream.Dockerfile
+new file mode 100644
+index 0000000..44b1e4e
+--- /dev/null
++++ b/examples/gateway/upstream.Dockerfile
+@@ -0,0 +1,9 @@
++FROM golang:1.27.2 AS build
++WORKDIR /src
++COPY go.mod go.sum ./
++RUN go mod download
++COPY . .
++RUN CGO_ENABLED=0 go build -trimpath -o /upstream ./examples/gateway/upstream
++FROM gcr.io/distroless/static-debian13:nonroot
++COPY --from=build /upstream /upstream
++ENTRYPOINT ["/upstream"]
+diff --git a/go.mod b/go.mod
+index 913f6db..251c883 100644
+--- a/go.mod
++++ b/go.mod
+@@ -5,6 +5,7 @@ go 1.27.0
+ toolchain go1.27.2
+ 
+ require (
++	github.com/golang-jwt/jwt/v5 v5.3.1
+ 	golang.org/x/net v0.59.0
+ 	gopkg.in/yaml.v3 v3.0.1
+ )
+diff --git a/go.sum b/go.sum
+index b1d8500..8a64272 100644
+--- a/go.sum
++++ b/go.sum
+@@ -1,3 +1,5 @@
++github.com/golang-jwt/jwt/v5 v5.3.1 h1:kYf81DTWFe7t+1VvL7eS+jKFVWaUnK9cB1qbwn63YCY=
++github.com/golang-jwt/jwt/v5 v5.3.1/go.mod h1:fxCRLWMO43lRc8nhHWY6LGqRcf+1gQWArsqaEUEa5bE=
+ golang.org/x/net v0.59.0 h1:5zfYln+w5XCxwrnMMJPufRgNoXEaGxl0wo5GqPXyues=
+ golang.org/x/net v0.59.0/go.mod h1:2DA/G1UfVbCpQPeWTmMPGY7Cs2PkBkwu743bVX5PIVg=
+ golang.org/x/text v0.42.0 h1:JbOZXgfeCPU9gacVtYliJqOhD+zhrEqK4LfdpmlUZqI=
+diff --git a/internal/approval/approval.go b/internal/approval/approval.go
+index 3addcfe..162871b 100644
+--- a/internal/approval/approval.go
++++ b/internal/approval/approval.go
+@@ -28,6 +28,9 @@ type Request struct {
+ 	Server    string          `json:"server"`
+ 	Tool      string          `json:"tool"`
+ 	Arguments json.RawMessage `json:"arguments"`
++	User      string          `json:"user,omitempty"`
++	Groups    []string        `json:"groups,omitempty"`
++	Client    string          `json:"client,omitempty"`
+ }
+ 
+ type Response struct {
+diff --git a/internal/audit/export.go b/internal/audit/export.go
+new file mode 100644
+index 0000000..c6afb5a
+--- /dev/null
++++ b/internal/audit/export.go
+@@ -0,0 +1,189 @@
++package audit
++
++import (
++	"bytes"
++	"crypto/tls"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"net/http"
++	"net/url"
++	"os"
++	"strconv"
++	"strings"
++	"sync"
++	"time"
++
++	"github.com/RamazanKara/fencepost/internal/policy"
++)
++
++type lineExporter struct {
++	queue chan []byte
++	done  chan struct{}
++	mu    sync.Mutex
++	err   error
++}
++
++func OpenConfigured(config policy.Audit, stdout io.Writer) (*Log, error) {
++	if config.Syslog != "" {
++		u, err := url.Parse(config.Syslog)
++		if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" || (u.Scheme != "tcp" && u.Scheme != "udp" && u.Scheme != "tls") {
++			return nil, errors.New("syslog must be tcp://host:port, udp://host:port, or tls://host:port")
++		}
++		if _, _, err := net.SplitHostPort(u.Host); err != nil {
++			return nil, errors.New("syslog requires host and port")
++		}
++	}
++	var file *os.File
++	var err error
++	if config.ExportFile != "" {
++		file, err = os.OpenFile(config.ExportFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
++		if err != nil {
++			return nil, err
++		}
++	}
++	l, err := Open(config.Path, config.OTLPEndpoint)
++	if err != nil {
++		if file != nil {
++			_ = file.Close()
++		}
++		return nil, err
++	}
++	if !config.Stdout && file == nil && config.OTLPLogsEndpoint == "" && config.Syslog == "" {
++		return l, nil
++	}
++	e := &lineExporter{queue: make(chan []byte, 256), done: make(chan struct{})}
++	l.lines = e
++	go func() {
++		defer close(e.done)
++		defer func() {
++			if file != nil {
++				_ = file.Close()
++			}
++		}()
++		client := &http.Client{Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
++		defer client.CloseIdleConnections()
++		for line := range e.queue {
++			if config.Stdout {
++				if _, err := stdout.Write(line); err != nil {
++					e.failed()
++				}
++			}
++			if config.ExportFile != "" {
++				if file != nil {
++					info, err := file.Stat()
++					if err == nil && info.Size() > 0 && info.Size()+int64(len(line)) > config.MaxBytes {
++						_ = file.Close()
++						file = nil
++						if err := rotate(config.ExportFile, config.Backups); err != nil {
++							e.failed()
++						}
++					}
++				}
++				if file == nil {
++					file, err = os.OpenFile(config.ExportFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
++					if err != nil {
++						e.failed()
++					}
++				}
++				if file != nil {
++					if _, err := file.Write(line); err != nil {
++						e.failed()
++					}
++				}
++			}
++			if config.OTLPLogsEndpoint != "" {
++				record := map[string]any{"timeUnixNano": strconv.FormatInt(time.Now().UnixNano(), 10), "severityNumber": 9, "severityText": "INFO", "body": map[string]string{"stringValue": strings.TrimSpace(string(line))}}
++				payload := map[string]any{"resourceLogs": []any{map[string]any{"resource": map[string]any{"attributes": []any{map[string]any{"key": "service.name", "value": map[string]string{"stringValue": "fencepost"}}}}, "scopeLogs": []any{map[string]any{"scope": map[string]string{"name": "fencepost.audit"}, "logRecords": []any{record}}}}}}
++				data, _ := json.Marshal(payload)
++				resp, err := client.Post(config.OTLPLogsEndpoint, "application/json", bytes.NewReader(data))
++				if err != nil {
++					e.failed()
++				} else {
++					body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4097))
++					_ = resp.Body.Close()
++					var result struct {
++						PartialSuccess struct {
++							Rejected string `json:"rejectedLogRecords"`
++							Message  string `json:"errorMessage"`
++						} `json:"partialSuccess"`
++					}
++					if resp.StatusCode != 200 || readErr != nil || len(body) > 4096 || (len(body) > 0 && json.Unmarshal(body, &result) != nil) || (result.PartialSuccess.Rejected != "" && result.PartialSuccess.Rejected != "0") || result.PartialSuccess.Message != "" {
++						e.failed()
++					}
++				}
++			}
++			if config.Syslog != "" {
++				if err := sendSyslog(config.Syslog, line); err != nil {
++					e.failed()
++				}
++			}
++		}
++	}()
++	return l, nil
++}
++
++func rotate(path string, backups int) error {
++	if err := os.Remove(path + "." + strconv.Itoa(backups)); err != nil && !errors.Is(err, os.ErrNotExist) {
++		return err
++	}
++	for i := backups - 1; i >= 1; i-- {
++		if err := os.Rename(path+"."+strconv.Itoa(i), path+"."+strconv.Itoa(i+1)); err != nil && !errors.Is(err, os.ErrNotExist) {
++			return err
++		}
++	}
++	return os.Rename(path, path+".1")
++}
++
++func sendSyslog(target string, line []byte) error {
++	u, _ := url.Parse(target)
++	dialer := &net.Dialer{Timeout: 2 * time.Second}
++	var conn net.Conn
++	var err error
++	if u.Scheme == "tls" {
++		conn, err = tls.DialWithDialer(dialer, "tcp", u.Host, &tls.Config{MinVersion: tls.VersionTLS12})
++	} else {
++		conn, err = dialer.Dial(u.Scheme, u.Host)
++	}
++	if err != nil {
++		return err
++	}
++	defer conn.Close()
++	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
++	message := fmt.Sprintf("<14>1 %s - fencepost - audit - %s", time.Now().UTC().Format(time.RFC3339Nano), bytes.TrimSpace(line))
++	if u.Scheme == "udp" {
++		if len(message) > 65507 {
++			return errors.New("syslog datagram too large")
++		}
++	} else {
++		message = strconv.Itoa(len(message)) + " " + message
++	}
++	_, err = io.WriteString(conn, message)
++	return err
++}
++
++func (e *lineExporter) failed() {
++	e.mu.Lock()
++	e.err = errors.New("some audit lines were not exported")
++	e.mu.Unlock()
++}
++func (e *lineExporter) send(line []byte) {
++	select {
++	case e.queue <- line:
++	default:
++		e.failed()
++	}
++}
++func (e *lineExporter) close() error {
++	close(e.queue)
++	select {
++	case <-e.done:
++	case <-time.After(5 * time.Second):
++		e.failed()
++	}
++	e.mu.Lock()
++	defer e.mu.Unlock()
++	return e.err
++}
+diff --git a/internal/audit/log.go b/internal/audit/log.go
+index 317273e..7478777 100644
+--- a/internal/audit/log.go
++++ b/internal/audit/log.go
+@@ -18,15 +18,22 @@ import (
+ )
+ 
+ type Event struct {
+-	Time       string         `json:"time"`
+-	Session    string         `json:"session"`
+-	Kind       string         `json:"kind"`
+-	Server     string         `json:"server,omitempty"`
+-	Tool       string         `json:"tool,omitempty"`
+-	Method     string         `json:"method,omitempty"`
+-	Decision   string         `json:"decision,omitempty"`
+-	Rule       string         `json:"rule,omitempty"`
+-	Redactions map[string]int `json:"redactions,omitempty"`
++	User       string          `json:"user,omitempty"`
++	Groups     []string        `json:"groups,omitempty"`
++	Client     string          `json:"client,omitempty"`
++	Approver   string          `json:"approver,omitempty"`
++	Reason     string          `json:"reason,omitempty"`
++	Arguments  json.RawMessage `json:"arguments,omitempty"`
++	Replayable bool            `json:"replayable,omitempty"`
++	Time       string          `json:"time"`
++	Session    string          `json:"session"`
++	Kind       string          `json:"kind"`
++	Server     string          `json:"server,omitempty"`
++	Tool       string          `json:"tool,omitempty"`
++	Method     string          `json:"method,omitempty"`
++	Decision   string          `json:"decision,omitempty"`
++	Rule       string          `json:"rule,omitempty"`
++	Redactions map[string]int  `json:"redactions,omitempty"`
+ }
+ 
+ type entry struct {
+@@ -50,6 +57,7 @@ type Log struct {
+ 	file, checkpoint, guard *os.File
+ 	mu                      sync.Mutex
+ 	export                  *exporter
++	lines                   *lineExporter
+ }
+ 
+ func Open(path, endpoint string) (*Log, error) {
+@@ -153,17 +161,24 @@ func (l *Log) Write(e Event) error {
+ 	if e.Time == "" {
+ 		e.Time = time.Now().UTC().Format(time.RFC3339Nano)
+ 	}
+-	for _, s := range []*string{&e.Server, &e.Tool, &e.Method, &e.Rule} {
++	for _, s := range []*string{&e.Server, &e.Tool, &e.Method, &e.Rule, &e.User, &e.Client, &e.Approver, &e.Reason} {
+ 		*s, _ = scan.RedactSecrets("", *s)
+ 		if len(*s) > 256 {
+ 			*s = "[oversized identifier]"
+ 		}
+ 	}
++	e.Groups = append([]string(nil), e.Groups...)
++	for i := range e.Groups {
++		e.Groups[i], _ = scan.RedactSecrets("", e.Groups[i])
++	}
+ 	data, _ := json.Marshal(entry{h.Sequence + 1, h.Hash, e})
+ 	sum := sha256.Sum256(data)
+ 	hash := hex.EncodeToString(sum[:])
+ 	line, _ := json.Marshal(Record{data, hash})
+ 	line = append(line, '\n')
++	if len(line) > 64<<10 {
++		return errors.New("audit entry exceeds limit")
++	}
+ 	n, err := l.file.Write(line)
+ 	if err != nil {
+ 		return err
+@@ -174,6 +189,9 @@ func (l *Log) Write(e Event) error {
+ 	if l.export != nil && e.Kind == "decision" {
+ 		l.export.send(e)
+ 	}
++	if l.lines != nil {
++		l.lines.send(line)
++	}
+ 	return nil
+ }
+ 
+@@ -184,6 +202,9 @@ func (l *Log) Close() error {
+ 	if l.export != nil {
+ 		err = errors.Join(err, l.export.close())
+ 	}
++	if l.lines != nil {
++		err = errors.Join(err, l.lines.close())
++	}
+ 	return err
+ }
+ 
+diff --git a/internal/audit/query.go b/internal/audit/query.go
+new file mode 100644
+index 0000000..9a12895
+--- /dev/null
++++ b/internal/audit/query.go
+@@ -0,0 +1,94 @@
++package audit
++
++import (
++	"bytes"
++	"encoding/json"
++	"fmt"
++	"io"
++	"strings"
++	"time"
++
++	"github.com/RamazanKara/fencepost/internal/policy"
++)
++
++type Filter struct {
++	User, Server, Tool, Decision string
++	From, Until                  time.Time
++}
++
++func Query(path string, filter Filter, out io.Writer) error {
++	var events []Event
++	_, err := Verify(path, func(e Event) {
++		if (filter.User != "" && e.User != filter.User) || (filter.Server != "" && e.Server != filter.Server) || (filter.Tool != "" && e.Tool != filter.Tool) || (filter.Decision != "" && e.Decision != filter.Decision) {
++			return
++		}
++		stamp, err := time.Parse(time.RFC3339Nano, e.Time)
++		if err != nil || (!filter.From.IsZero() && stamp.Before(filter.From)) || (!filter.Until.IsZero() && stamp.After(filter.Until)) {
++			return
++		}
++		events = append(events, e)
++	})
++	if err != nil {
++		return err
++	}
++	for _, e := range events {
++		if err := json.NewEncoder(out).Encode(e); err != nil {
++			return err
++		}
++	}
++	return nil
++}
++
++type Diff struct {
++	Time   string `json:"time"`
++	User   string `json:"user,omitempty"`
++	Server string `json:"server"`
++	Tool   string `json:"tool"`
++	Before string `json:"before"`
++	After  string `json:"after"`
++	Rule   string `json:"rule"`
++	Note   string `json:"note,omitempty"`
++}
++
++func PolicyDiff(path string, p *policy.Policy, out io.Writer) (int, error) {
++	var events []Event
++	modern := map[string]bool{}
++	_, err := Verify(path, func(e Event) {
++		if e.Kind == "policy" {
++			modern[e.Session] = true
++		}
++		if e.Kind == "policy" || (e.Kind == "decision" && e.Method == "tools/call") {
++			events = append(events, e)
++		}
++	})
++	if err != nil {
++		return 0, err
++	}
++	count := 0
++	for _, e := range events {
++		if e.Kind != "policy" && (modern[e.Session] || (e.Rule != "default" && e.Rule != "server" && !strings.HasPrefix(e.Rule, "tool:"))) {
++			continue
++		}
++		args := map[string]any{}
++		if len(e.Arguments) > 0 {
++			d := json.NewDecoder(bytes.NewReader(e.Arguments))
++			d.UseNumber()
++			if d.Decode(&args) != nil {
++				return count, fmt.Errorf("invalid recorded arguments")
++			}
++		}
++		action, rule, _ := p.MatchIdentity(e.Server, e.Tool, args, policy.Identity{User: e.User, Groups: e.Groups, Client: e.Client})
++		note := ""
++		if (len(e.Arguments) > 0 && !e.Replayable) || (len(e.Arguments) == 0 && strings.Contains(rule, "/argument:")) {
++			action, note = "unknown", "arguments were not recorded intact; constraints cannot be replayed"
++		}
++		if action == e.Decision {
++			continue
++		}
++		if err := json.NewEncoder(out).Encode(Diff{Time: e.Time, User: e.User, Server: e.Server, Tool: e.Tool, Before: e.Decision, After: action, Rule: rule, Note: note}); err != nil {
++			return count, err
++		}
++		count++
++	}
++	return count, nil
++}
+diff --git a/internal/audit/team_test.go b/internal/audit/team_test.go
+new file mode 100644
+index 0000000..0c1a499
+--- /dev/null
++++ b/internal/audit/team_test.go
+@@ -0,0 +1,114 @@
++package audit
++
++import (
++	"bytes"
++	"encoding/json"
++	"io"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/RamazanKara/fencepost/internal/policy"
++)
++
++func TestPolicyDiffAndQuery(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "audit.jsonl")
++	l, err := Open(path, "")
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, e := range []Event{
++		{Time: "2026-10-09T08:00:00Z", Kind: "policy", User: "alice", Server: "s", Tool: "echo", Decision: "allow", Arguments: json.RawMessage(`{"text":"hello"}`), Replayable: true},
++		{Time: "2026-10-09T09:00:00Z", Kind: "policy", User: "bob", Server: "s", Tool: "echo", Decision: "allow"},
++	} {
++		if err := l.Write(e); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if err := l.Close(); err != nil {
++		t.Fatal(err)
++	}
++	p, err := policy.Parse([]byte("version: 1\nservers:\n  s:\n    default: deny\n    tools:\n      - name: echo\n        action: allow\n        arguments: [{path: $.text, enum: [goodbye]}]\n"), t.TempDir())
++	if err != nil {
++		t.Fatal(err)
++	}
++	var out bytes.Buffer
++	n, err := PolicyDiff(path, p, &out)
++	if err != nil || n != 2 || !strings.Contains(out.String(), `"after":"deny"`) || !strings.Contains(out.String(), `"after":"unknown"`) {
++		t.Fatal(n, err, out.String())
++	}
++	out.Reset()
++	if err := Query(path, Filter{User: "alice", Server: "s", Tool: "echo", Decision: "allow", From: time.Date(2026, 10, 9, 7, 0, 0, 0, time.UTC), Until: time.Date(2026, 10, 9, 8, 0, 0, 0, time.UTC)}, &out); err != nil || bytes.Count(out.Bytes(), []byte("\n")) != 1 {
++		t.Fatal(err, out.String())
++	}
++	data, _ := os.ReadFile(path)
++	if err := os.WriteFile(path, bytes.Replace(data, []byte("alice"), []byte("evil!"), 1), 0600); err != nil {
++		t.Fatal(err)
++	}
++	out.Reset()
++	if err := Query(path, Filter{}, &out); err == nil || out.Len() != 0 {
++		t.Fatal("unverified output returned")
++	}
++}
++
++func TestAuditExports(t *testing.T) {
++	logs := make(chan []byte, 16)
++	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		data, _ := io.ReadAll(r.Body)
++		logs <- data
++		w.Header().Set("Content-Type", "application/json")
++		_, _ = w.Write([]byte("{}"))
++	}))
++	defer collector.Close()
++	udp, err := net.ListenPacket("udp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer udp.Close()
++	dir := t.TempDir()
++	var stdout bytes.Buffer
++	config := policy.Audit{Path: filepath.Join(dir, "audit"), Stdout: true, ExportFile: filepath.Join(dir, "rotating"), MaxBytes: 600, Backups: 3, OTLPLogsEndpoint: collector.URL, Syslog: "udp://" + udp.LocalAddr().String()}
++	l, err := OpenConfigured(config, &stdout)
++	if err != nil {
++		t.Fatal(err)
++	}
++	for range 3 {
++		if err := l.Write(Event{Kind: "decision", Decision: "deny", User: "alice", Server: "s"}); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if err := l.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if bytes.Count(stdout.Bytes(), []byte("\n")) != 3 {
++		t.Fatal(stdout.String())
++	}
++	if _, err := os.Stat(config.ExportFile + ".1"); err != nil {
++		t.Fatal(err)
++	}
++	if n, err := Verify(config.Path, nil); err != nil || n != 3 {
++		t.Fatal(n, err)
++	}
++	for range 3 {
++		select {
++		case data := <-logs:
++			var decoded map[string]any
++			if json.Unmarshal(data, &decoded) != nil || decoded["resourceLogs"] == nil || decoded["resourceSpans"] != nil {
++				t.Fatal(string(data))
++			}
++		case <-time.After(time.Second):
++			t.Fatal("missing OTLP log")
++		}
++	}
++	_ = udp.SetReadDeadline(time.Now().Add(time.Second))
++	buffer := make([]byte, 4096)
++	n, _, err := udp.ReadFrom(buffer)
++	if err != nil || !strings.HasPrefix(string(buffer[:n]), "<14>1 ") || !bytes.Contains(buffer[:n], []byte(`"hash"`)) {
++		t.Fatal(err, string(buffer[:n]))
++	}
++}
+diff --git a/internal/gateway/auth.go b/internal/gateway/auth.go
+new file mode 100644
+index 0000000..5a5d1f5
+--- /dev/null
++++ b/internal/gateway/auth.go
+@@ -0,0 +1,370 @@
++package gateway
++
++import (
++	"context"
++	"crypto/ecdsa"
++	"crypto/ed25519"
++	"crypto/elliptic"
++	"crypto/rsa"
++	"crypto/sha256"
++	"crypto/subtle"
++	"encoding/base64"
++	"encoding/json"
++	"errors"
++	"io"
++	"math/big"
++	"net/http"
++	"net/url"
++	"os"
++	"slices"
++	"strings"
++	"sync"
++	"time"
++
++	"github.com/RamazanKara/fencepost/internal/approval"
++	"github.com/RamazanKara/fencepost/internal/policy"
++	"github.com/golang-jwt/jwt/v5"
++)
++
++type AuthConfig struct {
++	Issuer           string            `yaml:"issuer"`
++	ClientNames      map[string]string `yaml:"client_names"`
++	BrowserClientID  string            `yaml:"browser_client_id"`
++	BrowserSecretEnv string            `yaml:"browser_secret_env"`
++	APIKeys          []APIKey          `yaml:"api_keys"`
++}
++
++type APIKey struct {
++	Env             string `yaml:"env"`
++	policy.Identity `yaml:",inline"`
++}
++
++type claims struct {
++	jwt.RegisteredClaims
++	Groups          []string `json:"groups"`
++	ClientID        string   `json:"client_id"`
++	AuthorizedParty string   `json:"azp"`
++}
++
++type signingKey struct {
++	algorithm string
++	key       any
++}
++type login struct {
++	verifier string
++	expires  time.Time
++}
++type browserSession struct {
++	token   string
++	expires time.Time
++}
++type staticKey struct {
++	hash     [32]byte
++	identity policy.Identity
++}
++
++type authenticator struct {
++	config                          AuthConfig
++	client                          *http.Client
++	keysURL, authorizeURL, tokenURL string
++	responseIssuer                  bool
++	static                          []staticKey
++	mu                              sync.Mutex
++	keys                            map[string]signingKey
++	refreshed                       time.Time
++	logins                          map[string]login
++	sessions                        map[string]browserSession
++}
++
++func newAuthenticator(ctx context.Context, config AuthConfig) (*authenticator, error) {
++	a := &authenticator{config: config, client: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
++		keys: map[string]signingKey{}, logins: map[string]login{}, sessions: map[string]browserSession{}}
++	for _, key := range config.APIKeys {
++		secret := os.Getenv(key.Env)
++		if len(secret) < 32 || key.User == "" || key.Client == "" {
++			return nil, errors.New("API keys require an environment secret of at least 32 bytes, user and client")
++		}
++		a.static = append(a.static, staticKey{sha256.Sum256([]byte(secret)), key.Identity})
++	}
++	if config.Issuer == "" {
++		if len(a.static) == 0 || config.BrowserClientID != "" {
++			return nil, errors.New("authentication requires an issuer or API keys")
++		}
++		return a, nil
++	}
++	if !policy.SafeEndpoint(config.Issuer) {
++		return nil, errors.New("issuer must use HTTPS or literal loopback HTTP")
++	}
++	var discovery struct {
++		Issuer         string   `json:"issuer"`
++		JWKS           string   `json:"jwks_uri"`
++		Authorize      string   `json:"authorization_endpoint"`
++		Token          string   `json:"token_endpoint"`
++		Challenges     []string `json:"code_challenge_methods_supported"`
++		ResponseIssuer bool     `json:"authorization_response_iss_parameter_supported"`
++	}
++	if err := a.getJSON(ctx, strings.TrimSuffix(config.Issuer, "/")+"/.well-known/openid-configuration", &discovery); err != nil {
++		return nil, errors.New("OIDC discovery failed")
++	}
++	if discovery.Issuer != config.Issuer || !policy.SafeEndpoint(discovery.JWKS) {
++		return nil, errors.New("OIDC issuer or JWKS endpoint mismatch")
++	}
++	a.keysURL, a.authorizeURL, a.tokenURL, a.responseIssuer = discovery.JWKS, discovery.Authorize, discovery.Token, discovery.ResponseIssuer
++	if config.BrowserClientID != "" && (!policy.SafeEndpoint(a.authorizeURL) || !policy.SafeEndpoint(a.tokenURL) || !slices.Contains(discovery.Challenges, "S256")) {
++		return nil, errors.New("browser sign-in requires secure authorization/token endpoints and PKCE S256")
++	}
++	if config.BrowserSecretEnv != "" && os.Getenv(config.BrowserSecretEnv) == "" {
++		return nil, errors.New("browser client secret environment variable is empty")
++	}
++	if err := a.refresh(ctx); err != nil {
++		return nil, err
++	}
++	return a, nil
++}
++
++func (a *authenticator) getJSON(ctx context.Context, endpoint string, value any) error {
++	r, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
++	if err != nil {
++		return err
++	}
++	resp, err := a.client.Do(r)
++	if err != nil {
++		return err
++	}
++	defer resp.Body.Close()
++	data, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
++	if err != nil || len(data) > 1<<20 || resp.StatusCode != http.StatusOK {
++		return errors.New("invalid issuer response")
++	}
++	return json.Unmarshal(data, value)
++}
++
++func (a *authenticator) refresh(ctx context.Context) error {
++	var set struct {
++		Keys []struct {
++			Kty, Kid, Use, Alg, N, E, Crv, X, Y string
++			KeyOps                              []string `json:"key_ops"`
++		}
++	}
++	if err := a.getJSON(ctx, a.keysURL, &set); err != nil {
++		return errors.New("JWKS fetch failed")
++	}
++	keys := map[string]signingKey{}
++	for _, k := range set.Keys {
++		if k.Kid == "" || (k.Use != "" && k.Use != "sig") || (k.KeyOps != nil && !slices.Contains(k.KeyOps, "verify")) {
++			continue
++		}
++		decode := func(raw string) []byte { b, _ := base64.RawURLEncoding.DecodeString(raw); return b }
++		var key any
++		alg := ""
++		switch k.Kty {
++		case "RSA":
++			n, e := new(big.Int).SetBytes(decode(k.N)), new(big.Int).SetBytes(decode(k.E))
++			if n.BitLen() < 2048 || !e.IsInt64() || e.Int64() < 3 || e.Int64() > 1<<31-1 {
++				continue
++			}
++			key, alg = &rsa.PublicKey{N: n, E: int(e.Int64())}, "RS256"
++		case "EC":
++			x, y := decode(k.X), decode(k.Y)
++			if k.Crv != "P-256" || len(x) != 32 || len(y) != 32 {
++				continue
++			}
++			parsed, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), append(append([]byte{4}, x...), y...))
++			if err != nil {
++				continue
++			}
++			key, alg = parsed, "ES256"
++		case "OKP":
++			x := decode(k.X)
++			if k.Crv != "Ed25519" || len(x) != ed25519.PublicKeySize {
++				continue
++			}
++			key, alg = ed25519.PublicKey(x), "EdDSA"
++		}
++		if key == nil || (k.Alg != "" && k.Alg != alg) {
++			continue
++		}
++		if _, duplicate := keys[k.Kid]; duplicate {
++			return errors.New("duplicate JWKS key ID")
++		}
++		keys[k.Kid] = signingKey{alg, key}
++	}
++	if len(keys) == 0 {
++		return errors.New("JWKS contains no supported signing keys")
++	}
++	a.keys, a.refreshed = keys, time.Now()
++	return nil
++}
++
++func (a *authenticator) validate(ctx context.Context, raw, audience string) (policy.Identity, time.Time, error) {
++	invalid := errors.New("invalid access token")
++	if a.config.Issuer == "" || len(raw) > 32<<10 {
++		return policy.Identity{}, time.Time{}, invalid
++	}
++	c := &claims{}
++	_, err := jwt.ParseWithClaims(raw, c, func(t *jwt.Token) (any, error) {
++		kid, _ := t.Header["kid"].(string)
++		a.mu.Lock()
++		defer a.mu.Unlock()
++		key, ok := a.keys[kid]
++		if time.Since(a.refreshed) > 5*time.Minute || (!ok && time.Since(a.refreshed) > 30*time.Second) {
++			if err := a.refresh(ctx); err != nil {
++				return nil, err
++			}
++			key, ok = a.keys[kid]
++		}
++		if !ok || key.algorithm != t.Method.Alg() {
++			return nil, invalid
++		}
++		return key.key, nil
++	}, jwt.WithValidMethods([]string{"RS256", "ES256", "EdDSA"}), jwt.WithIssuer(a.config.Issuer), jwt.WithAudience(audience), jwt.WithExpirationRequired(), jwt.WithIssuedAt())
++	if err != nil || c.Subject == "" {
++		return policy.Identity{}, time.Time{}, invalid
++	}
++	client := c.ClientID
++	if client == "" {
++		client = c.AuthorizedParty
++	}
++	if client == "" {
++		return policy.Identity{}, time.Time{}, invalid
++	}
++	if name := a.config.ClientNames[client]; name != "" {
++		client = name
++	}
++	return policy.Identity{User: c.Subject, Groups: c.Groups, Client: client}, c.ExpiresAt.Time, nil
++}
++
++func (a *authenticator) identity(r *http.Request, audience string, browser bool) (policy.Identity, error) {
++	raw := ""
++	values := r.Header.Values("Authorization")
++	if len(values) == 1 {
++		parts := strings.Fields(values[0])
++		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
++			raw = parts[1]
++		}
++	}
++	if len(values) > 0 && raw == "" {
++		return policy.Identity{}, errors.New("invalid authorization header")
++	}
++	if raw != "" {
++		hash := sha256.Sum256([]byte(raw))
++		for _, key := range a.static {
++			if subtle.ConstantTimeCompare(hash[:], key.hash[:]) == 1 {
++				return key.identity, nil
++			}
++		}
++	}
++	if raw == "" && browser {
++		if cookie, err := r.Cookie("fencepost_session"); err == nil {
++			a.mu.Lock()
++			session := a.sessions[cookie.Value]
++			a.mu.Unlock()
++			if time.Now().Before(session.expires) {
++				raw = session.token
++			}
++		}
++	}
++	if raw == "" {
++		return policy.Identity{}, errors.New("authentication required")
++	}
++	identity, _, err := a.validate(r.Context(), raw, audience)
++	return identity, err
++}
++
++func (a *authenticator) browser(w http.ResponseWriter, r *http.Request, base string) {
++	if r.Method != "GET" || a.config.BrowserClientID == "" {
++		http.NotFound(w, r)
++		return
++	}
++	secure := strings.HasPrefix(base, "https://")
++	setCookie := func(name, value string, age int) {
++		http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: age})
++	}
++	now := time.Now()
++	a.mu.Lock()
++	for k, v := range a.logins {
++		if !now.Before(v.expires) {
++			delete(a.logins, k)
++		}
++	}
++	for k, v := range a.sessions {
++		if !now.Before(v.expires) {
++			delete(a.sessions, k)
++		}
++	}
++	a.mu.Unlock()
++	if r.URL.Path == "/login" {
++		state, verifier := approval.Token(), approval.Token()
++		a.mu.Lock()
++		if len(a.logins) >= 256 {
++			a.mu.Unlock()
++			http.Error(w, "Busy", http.StatusTooManyRequests)
++			return
++		}
++		a.logins[state] = login{verifier, now.Add(5 * time.Minute)}
++		a.mu.Unlock()
++		setCookie("fencepost_login", state, 300)
++		challenge := sha256.Sum256([]byte(verifier))
++		u, _ := url.Parse(a.authorizeURL)
++		q := u.Query()
++		for k, v := range map[string]string{"response_type": "code", "client_id": a.config.BrowserClientID, "redirect_uri": base + "/callback", "scope": "openid", "resource": base + "/approvals", "state": state, "code_challenge": base64.RawURLEncoding.EncodeToString(challenge[:]), "code_challenge_method": "S256"} {
++			q.Set(k, v)
++		}
++		u.RawQuery = q.Encode()
++		http.Redirect(w, r, u.String(), http.StatusSeeOther)
++		return
++	}
++	state := r.URL.Query().Get("state")
++	cookie, err := r.Cookie("fencepost_login")
++	if err != nil || state == "" || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(state)) != 1 {
++		http.Error(w, "Invalid sign-in state", 400)
++		return
++	}
++	a.mu.Lock()
++	l, ok := a.logins[state]
++	delete(a.logins, state)
++	a.mu.Unlock()
++	setCookie("fencepost_login", "", -1)
++	issuer := r.URL.Query().Get("iss")
++	if !ok || !now.Before(l.expires) || (issuer != "" && issuer != a.config.Issuer) || (a.responseIssuer && issuer == "") || r.URL.Query().Get("code") == "" {
++		http.Error(w, "Invalid sign-in response", 400)
++		return
++	}
++	form := url.Values{"grant_type": {"authorization_code"}, "code": {r.URL.Query().Get("code")}, "client_id": {a.config.BrowserClientID}, "redirect_uri": {base + "/callback"}, "resource": {base + "/approvals"}, "code_verifier": {l.verifier}}
++	req, _ := http.NewRequestWithContext(r.Context(), "POST", a.tokenURL, strings.NewReader(form.Encode()))
++	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
++	if a.config.BrowserSecretEnv != "" {
++		req.SetBasicAuth(url.QueryEscape(a.config.BrowserClientID), url.QueryEscape(os.Getenv(a.config.BrowserSecretEnv)))
++	}
++	resp, err := a.client.Do(req)
++	if err != nil {
++		http.Error(w, "Sign-in failed", http.StatusBadGateway)
++		return
++	}
++	defer resp.Body.Close()
++	var token struct {
++		AccessToken string `json:"access_token"`
++		TokenType   string `json:"token_type"`
++	}
++	data, err := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
++	if err != nil || len(data) > 64<<10 || resp.StatusCode != 200 || json.Unmarshal(data, &token) != nil || !strings.EqualFold(token.TokenType, "Bearer") {
++		http.Error(w, "Sign-in failed", http.StatusUnauthorized)
++		return
++	}
++	_, expires, err := a.validate(r.Context(), token.AccessToken, base+"/approvals")
++	if err != nil {
++		http.Error(w, "Invalid access token", http.StatusUnauthorized)
++		return
++	}
++	id := approval.Token()
++	a.mu.Lock()
++	if len(a.sessions) >= 256 {
++		a.mu.Unlock()
++		http.Error(w, "Busy", http.StatusTooManyRequests)
++		return
++	}
++	a.sessions[id] = browserSession{token.AccessToken, expires}
++	a.mu.Unlock()
++	setCookie("fencepost_session", id, max(1, int(time.Until(expires).Seconds())))
++	http.Redirect(w, r, "/approvals", http.StatusSeeOther)
++}
+diff --git a/internal/gateway/config.go b/internal/gateway/config.go
+new file mode 100644
+index 0000000..c4fffb1
+--- /dev/null
++++ b/internal/gateway/config.go
+@@ -0,0 +1,102 @@
++package gateway
++
++import (
++	"bytes"
++	"errors"
++	"io"
++	"net/url"
++	"os"
++	"path/filepath"
++	"regexp"
++	"strings"
++
++	"github.com/RamazanKara/fencepost/internal/clientconfig"
++	"github.com/RamazanKara/fencepost/internal/policy"
++	"gopkg.in/yaml.v3"
++)
++
++type Config struct {
++	Listen    string              `yaml:"listen"`
++	PublicURL string              `yaml:"public_url"`
++	Policy    policy.SourceConfig `yaml:"policy"`
++	Lock      string              `yaml:"lock"`
++	Auth      AuthConfig          `yaml:"auth"`
++	Approval  InboxConfig         `yaml:"approval"`
++	Servers   map[string]Upstream `yaml:"servers"`
++}
++
++type Upstream struct {
++	URL     string            `yaml:"url"`
++	Command string            `yaml:"command"`
++	Args    []string          `yaml:"args"`
++	Env     map[string]string `yaml:"env"`
++	Headers map[string]string `yaml:"headers"`
++	Cwd     string            `yaml:"cwd"`
++}
++
++func ReadConfig(filename string) (Config, string, error) {
++	var c Config
++	data, err := os.ReadFile(filename)
++	if err != nil {
++		return c, "", err
++	}
++	d := yaml.NewDecoder(bytes.NewReader(data))
++	d.KnownFields(true)
++	if d.Decode(&c) != nil {
++		return c, "", errors.New("invalid gateway configuration")
++	}
++	var extra any
++	if d.Decode(&extra) != io.EOF {
++		return c, "", errors.New("gateway config must contain one YAML document")
++	}
++	base, err := filepath.Abs(filepath.Dir(filename))
++	if err != nil {
++		return c, "", err
++	}
++	return c, base, nil
++}
++
++func (c *Config) validate(base string) error {
++	if c.Listen == "" {
++		c.Listen = "127.0.0.1:8787"
++	}
++	u, err := url.Parse(c.PublicURL)
++	if err != nil || !policy.SafeEndpoint(c.PublicURL) || u.RawQuery != "" || (u.Path != "" && u.Path != "/") {
++		return errors.New("public_url must be an HTTPS origin (HTTP only on literal loopback)")
++	}
++	c.PublicURL = strings.TrimSuffix(c.PublicURL, "/")
++	if c.Lock == "" {
++		c.Lock = "fencepost.lock"
++	}
++	if !filepath.IsAbs(c.Lock) {
++		c.Lock = filepath.Join(base, c.Lock)
++	}
++	if len(c.Servers) == 0 {
++		return errors.New("gateway requires upstream servers")
++	}
++	validName := regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
++	for name, s := range c.Servers {
++		if !validName.MatchString(name) || (s.Command == "") == (s.URL == "") {
++			return errors.New("each server requires a URL-safe name and exactly one command or URL")
++		}
++		if s.URL != "" && !policy.SafeEndpoint(s.URL) {
++			return errors.New("upstreams require HTTPS or literal loopback HTTP")
++		}
++		if s.Cwd != "" && !filepath.IsAbs(s.Cwd) {
++			s.Cwd = filepath.Join(base, s.Cwd)
++		}
++		if s.Env == nil {
++			s.Env = map[string]string{}
++		}
++		resolved, err := clientconfig.Resolve(clientconfig.Server{Name: name, Command: s.Command, Args: s.Args, Env: s.Env, Headers: s.Headers, Cwd: s.Cwd, URL: s.URL}, os.LookupEnv)
++		if err != nil {
++			return errors.New("cannot resolve upstream environment references")
++		}
++		s.Env, s.Headers, s.Args, s.Command, s.URL, s.Cwd = resolved.Env, resolved.Headers, resolved.Args, resolved.Command, resolved.URL, resolved.Cwd
++		c.Servers[name] = s
++	}
++	if c.Approval.WebhookURL != "" && (!policy.SafeEndpoint(c.Approval.WebhookURL) || len(os.Getenv(c.Approval.HMACSecretEnv)) < 32) {
++		return errors.New("approval webhook requires HTTPS and an HMAC environment secret of at least 32 bytes")
++	}
++	return nil
++}
+diff --git a/internal/gateway/gateway.go b/internal/gateway/gateway.go
+new file mode 100644
+index 0000000..dd77435
+--- /dev/null
++++ b/internal/gateway/gateway.go
+@@ -0,0 +1,223 @@
++package gateway
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"net/http"
++	"net/url"
++	"strings"
++	"sync"
++	"time"
++
++	"github.com/RamazanKara/fencepost/internal/audit"
++	"github.com/RamazanKara/fencepost/internal/clientconfig"
++	"github.com/RamazanKara/fencepost/internal/policy"
++	"github.com/RamazanKara/fencepost/internal/proxy"
++)
++
++type connection struct {
++	handler http.Handler
++	close   func()
++	used    time.Time
++	active  int
++}
++
++type Gateway struct {
++	config      Config
++	auth        *authenticator
++	policy      *policy.Source
++	log         *audit.Log
++	inbox       *inbox
++	ctx         context.Context
++	cancel      context.CancelFunc
++	done        chan struct{}
++	mu          sync.Mutex
++	connections map[string]*connection
++}
++
++func New(ctx context.Context, c Config, base string, stdout, diagnostics io.Writer) (*Gateway, error) {
++	if err := c.validate(base); err != nil {
++		return nil, err
++	}
++	source, err := policy.LoadSource(ctx, c.Policy, base)
++	if err != nil {
++		return nil, err
++	}
++	auth, err := newAuthenticator(ctx, c.Auth)
++	if err != nil {
++		return nil, err
++	}
++	log, err := audit.OpenConfigured(source.Current().Audit, stdout)
++	if err != nil {
++		auth.client.CloseIdleConnections()
++		return nil, err
++	}
++	ctx, cancel := context.WithCancel(ctx)
++	g := &Gateway{config: c, auth: auth, policy: source, log: log, ctx: ctx, cancel: cancel, done: make(chan struct{}), connections: map[string]*connection{}}
++	g.inbox = newInbox(c.Approval, c.PublicURL, log)
++	go func() {
++		defer close(g.done)
++		source.Poll(ctx, func(err error) {
++			fmt.Fprintf(diagnostics, "Policy refresh rejected; retaining last verified policy: %v\n", err)
++		})
++	}()
++	return g, nil
++}
++
++func (g *Gateway) Close() error {
++	g.cancel()
++	<-g.done
++	g.mu.Lock()
++	for key, c := range g.connections {
++		c.close()
++		delete(g.connections, key)
++	}
++	g.mu.Unlock()
++	g.auth.client.CloseIdleConnections()
++	return g.log.Close()
++}
++
++func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
++	w.Header().Set("Cache-Control", "no-store")
++	w.Header().Set("Referrer-Policy", "no-referrer")
++	w.Header().Set("X-Content-Type-Options", "nosniff")
++	u, _ := url.Parse(g.config.PublicURL)
++	if r.Host != u.Host || (r.Header.Get("Origin") != "" && r.Header.Get("Origin") != g.config.PublicURL) {
++		http.Error(w, "Unexpected host or origin", http.StatusForbidden)
++		return
++	}
++	if r.URL.RawQuery != "" && r.URL.Path != "/callback" {
++		http.Error(w, "Query parameters are not accepted", 400)
++		return
++	}
++	if r.URL.Path == "/healthz" && r.Method == "GET" {
++		w.WriteHeader(204)
++		return
++	}
++	if r.URL.Path == "/login" || r.URL.Path == "/callback" {
++		g.auth.browser(w, r, g.config.PublicURL)
++		return
++	}
++	path := r.URL.Path
++	metadata := strings.HasPrefix(path, "/.well-known/oauth-protected-resource/")
++	if metadata {
++		path = strings.TrimPrefix(path, "/.well-known/oauth-protected-resource")
++	}
++	browser := path == "/approvals" || strings.HasPrefix(path, "/approvals/")
++	server := strings.TrimPrefix(path, "/mcp/")
++	upstream, found := g.config.Servers[server]
++	if !browser && (!strings.HasPrefix(path, "/mcp/") || !found) {
++		http.NotFound(w, r)
++		return
++	}
++	resource := g.config.PublicURL + path
++	if browser {
++		resource = g.config.PublicURL + "/approvals"
++	}
++	metadataURL := g.config.PublicURL + "/.well-known/oauth-protected-resource" + strings.TrimPrefix(resource, g.config.PublicURL)
++	if metadata {
++		if r.Method != "GET" {
++			w.WriteHeader(405)
++			return
++		}
++		issuers := []string{}
++		if g.config.Auth.Issuer != "" {
++			issuers = append(issuers, g.config.Auth.Issuer)
++		}
++		w.Header().Set("Content-Type", "application/json")
++		_ = json.NewEncoder(w).Encode(map[string]any{"resource": resource, "authorization_servers": issuers, "bearer_methods_supported": []string{"header"}})
++		return
++	}
++	identity, err := g.auth.identity(r, resource, browser)
++	if err != nil {
++		w.Header().Set("WWW-Authenticate", fmt.Sprintf("Bearer resource_metadata=%q, error=\"invalid_token\"", metadataURL))
++		if browser && r.Method == "GET" && r.Header.Get("Authorization") == "" && g.config.Auth.BrowserClientID != "" {
++			http.Redirect(w, r, "/login", http.StatusSeeOther)
++			return
++		}
++		http.Error(w, "Authentication required", http.StatusUnauthorized)
++		return
++	}
++	if browser {
++		g.inbox.serve(w, r, identity)
++		return
++	}
++	if r.Method != "POST" && r.Method != "GET" && r.Method != "DELETE" {
++		w.WriteHeader(405)
++		return
++	}
++	encoded, _ := json.Marshal(identity)
++	key := server + "\n" + string(encoded)
++	g.mu.Lock()
++	for k, c := range g.connections {
++		if c.active == 0 && time.Since(c.used) > 30*time.Minute {
++			c.close()
++			delete(g.connections, k)
++		}
++	}
++	c := g.connections[key]
++	if c == nil {
++		if len(g.connections) >= 256 {
++			g.mu.Unlock()
++			http.Error(w, "Gateway busy", http.StatusServiceUnavailable)
++			return
++		}
++		c = &connection{}
++		if upstream.URL != "" {
++			h, err := proxy.NewHTTP(g.policy.Current(), g.log, server, g.config.Lock, upstream.URL, upstream.Headers)
++			if err != nil {
++				g.mu.Unlock()
++				http.Error(w, "Upstream configuration unavailable", http.StatusServiceUnavailable)
++				return
++			}
++			h.Configure(identity, g.policy.Current, g.inbox.ask)
++			c.handler, c.close = h, h.Close
++		} else {
++			e, err := proxy.New(g.policy.Current(), g.log, server, g.config.Lock)
++			if err != nil {
++				g.mu.Unlock()
++				http.Error(w, "Pin baseline unavailable", http.StatusServiceUnavailable)
++				return
++			}
++			e.Identity, e.PolicySource, e.Approve = identity, g.policy.Current, g.inbox.ask
++			h := proxy.NewStdioHTTP(g.ctx, e, clientconfig.Server{Name: server, Command: upstream.Command, Args: upstream.Args, Env: upstream.Env, Cwd: upstream.Cwd})
++			c.handler, c.close = h, h.Close
++		}
++		g.connections[key] = c
++	}
++	c.active++
++	c.used = time.Now()
++	g.mu.Unlock()
++	defer func() { g.mu.Lock(); c.active--; c.used = time.Now(); g.mu.Unlock() }()
++	r = r.Clone(r.Context())
++	r.Header.Del("Origin")
++	c.handler.ServeHTTP(w, r)
++}
++
++func Serve(ctx context.Context, g *Gateway, diagnostics io.Writer) error {
++	listener, err := net.Listen("tcp", g.config.Listen)
++	if err != nil {
++		return err
++	}
++	defer listener.Close()
++	fmt.Fprintf(diagnostics, "Fencepost gateway listening on %s\n", listener.Addr())
++	server := &http.Server{Handler: g, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 64 << 10, BaseContext: func(net.Listener) context.Context { return ctx }}
++	done := make(chan struct{})
++	defer close(done)
++	go func() {
++		select {
++		case <-ctx.Done():
++			_ = server.Close()
++		case <-done:
++		}
++	}()
++	err = server.Serve(listener)
++	if errors.Is(err, http.ErrServerClosed) {
++		return nil
++	}
++	return err
++}
+diff --git a/internal/gateway/gateway_test.go b/internal/gateway/gateway_test.go
+new file mode 100644
+index 0000000..3dab9c5
+--- /dev/null
++++ b/internal/gateway/gateway_test.go
+@@ -0,0 +1,430 @@
++package gateway
++
++import (
++	"bytes"
++	"context"
++	"crypto/ecdsa"
++	"crypto/ed25519"
++	"crypto/elliptic"
++	"crypto/rand"
++	"crypto/sha256"
++	"encoding/base64"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"net/http/cookiejar"
++	"net/http/httptest"
++	"net/url"
++	"os"
++	"path/filepath"
++	"regexp"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/RamazanKara/fencepost/internal/approval"
++	"github.com/RamazanKara/fencepost/internal/audit"
++	"github.com/RamazanKara/fencepost/internal/policy"
++	"github.com/golang-jwt/jwt/v5"
++)
++
++func TestGatewayECSigningKeys(t *testing.T) {
++	private, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
++	if err != nil {
++		t.Fatal(err)
++	}
++	point, err := private.PublicKey.Bytes()
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, test := range []struct {
++		name  string
++		x, y  []byte
++		valid bool
++	}{
++		{"valid", point[1:33], point[33:], true},
++		{"short", point[1:32], point[33:], false},
++		{"off-curve", make([]byte, 32), make([]byte, 32), false},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{map[string]string{"kid": "ec", "kty": "EC", "crv": "P-256", "alg": "ES256", "x": base64.RawURLEncoding.EncodeToString(test.x), "y": base64.RawURLEncoding.EncodeToString(test.y)}}})
++			}))
++			defer s.Close()
++			a := &authenticator{config: AuthConfig{Issuer: "https://issuer.example"}, keysURL: s.URL, client: s.Client()}
++			err := a.refresh(context.Background())
++			if !test.valid {
++				if err == nil {
++					t.Fatal("invalid EC key accepted")
++				}
++				return
++			}
++			if err != nil {
++				t.Fatal(err)
++			}
++			token := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{"iss": a.config.Issuer, "sub": "alice", "aud": "https://gateway.example/mcp/tools", "exp": time.Now().Add(time.Minute).Unix(), "client_id": "workflow"})
++			token.Header["kid"] = "ec"
++			raw, err := token.SignedString(private)
++			if err != nil {
++				t.Fatal(err)
++			}
++			identity, _, err := a.validate(context.Background(), raw, "https://gateway.example/mcp/tools")
++			if err != nil || identity.User != "alice" {
++				t.Fatal(identity, err)
++			}
++		})
++	}
++}
++
++type testIssuer struct {
++	*httptest.Server
++	private             ed25519.PrivateKey
++	mu                  sync.Mutex
++	audience, challenge string
++}
++
++func fakeIssuer(t *testing.T) *testIssuer {
++	t.Helper()
++	public, private, err := ed25519.GenerateKey(rand.Reader)
++	if err != nil {
++		t.Fatal(err)
++	}
++	i := &testIssuer{private: private}
++	i.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		w.Header().Set("Content-Type", "application/json")
++		switch r.URL.Path {
++		case "/.well-known/openid-configuration":
++			_ = json.NewEncoder(w).Encode(map[string]any{"issuer": i.URL, "jwks_uri": i.URL + "/jwks", "authorization_endpoint": i.URL + "/authorize", "token_endpoint": i.URL + "/token", "code_challenge_methods_supported": []string{"S256"}, "authorization_response_iss_parameter_supported": true})
++		case "/jwks":
++			_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{map[string]string{"kid": "key", "kty": "OKP", "crv": "Ed25519", "alg": "EdDSA", "use": "sig", "x": base64.RawURLEncoding.EncodeToString(public)}}})
++		case "/token":
++			_ = r.ParseForm()
++			i.mu.Lock()
++			aud, challenge := i.audience, i.challenge
++			i.mu.Unlock()
++			sum := sha256.Sum256([]byte(r.Form.Get("code_verifier")))
++			if r.Form.Get("resource") != aud || r.Form.Get("grant_type") != "authorization_code" || base64.RawURLEncoding.EncodeToString(sum[:]) != challenge {
++				http.Error(w, "PKCE or resource mismatch", 400)
++				return
++			}
++			_ = json.NewEncoder(w).Encode(map[string]string{"access_token": i.token("reviewer", aud, []string{"approvers"}, nil), "token_type": "Bearer"})
++		default:
++			http.NotFound(w, r)
++		}
++	}))
++	t.Cleanup(i.Close)
++	return i
++}
++
++func (i *testIssuer) token(user, audience string, groups []string, change func(jwt.MapClaims)) string {
++	c := jwt.MapClaims{"iss": i.URL, "sub": user, "aud": audience, "exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix(), "client_id": "workflow", "groups": groups}
++	if change != nil {
++		change(c)
++	}
++	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, c)
++	token.Header["kid"] = "key"
++	raw, _ := token.SignedString(i.private)
++	return raw
++}
++
++func testGateway(t *testing.T, issuer *testIssuer, upstream string) (*Gateway, *httptest.Server, string) {
++	t.Helper()
++	dir := t.TempDir()
++	data := `version: 1
++servers:
++  remote:
++    default: deny
++    tools:
++      - {name: echo, action: allow, groups: [engineering], clients: [agentworkflows]}
++      - {name: write, action: ask, groups: [engineering]}
++approval: {timeout: 5s}
++audit: {record_arguments: true}
++`
++	if err := os.WriteFile(filepath.Join(dir, "policy.yaml"), []byte(data), 0600); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("FENCEPOST_GATEWAY_TEST_KEY", strings.Repeat("ci-test-", 6))
++	s := httptest.NewUnstartedServer(nil)
++	c := Config{PublicURL: "http://" + s.Listener.Addr().String(), Policy: policy.SourceConfig{Source: "policy.yaml"}, Servers: map[string]Upstream{"remote": {URL: upstream}}, Auth: AuthConfig{Issuer: issuer.URL, ClientNames: map[string]string{"workflow": "agentworkflows"}, BrowserClientID: "inbox", APIKeys: []APIKey{{Env: "FENCEPOST_GATEWAY_TEST_KEY", Identity: policy.Identity{User: "ci", Client: "agentworkflows", Groups: []string{"engineering"}}}}}, Approval: InboxConfig{Groups: []string{"approvers"}}}
++	g, err := New(context.Background(), c, dir, io.Discard, io.Discard)
++	if err != nil {
++		s.Close()
++		t.Fatal(err)
++	}
++	s.Config.Handler = g
++	s.Start()
++	t.Cleanup(func() {
++		g.cancel()
++		s.Close()
++		if err := g.Close(); err != nil {
++			t.Error(err)
++		}
++	})
++	return g, s, dir
++}
++
++func gatewayRequest(t *testing.T, client *http.Client, method, endpoint, token, body string) (int, http.Header, string) {
++	t.Helper()
++	r, err := http.NewRequest(method, endpoint, strings.NewReader(body))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if token != "" {
++		r.Header.Set("Authorization", "Bearer "+token)
++	}
++	r.Header.Set("Content-Type", "application/json")
++	r.Header.Set("Accept", "application/json, text/event-stream")
++	resp, err := client.Do(r)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer resp.Body.Close()
++	data, err := io.ReadAll(resp.Body)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return resp.StatusCode, resp.Header, string(data)
++}
++
++func TestGatewayOIDCAndIsolation(t *testing.T) {
++	i := fakeIssuer(t)
++	var calls atomic.Int64
++	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" || r.Header.Get("X-User") != "" {
++			t.Error("gateway credentials leaked upstream")
++		}
++		var message map[string]json.RawMessage
++		_ = json.NewDecoder(r.Body).Decode(&message)
++		w.Header().Set("Content-Type", "application/json")
++		if string(message["method"]) == `"initialize"` {
++			w.Header().Set("Mcp-Session-Id", "upstream-session")
++		}
++		calls.Add(1)
++		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": message["id"], "result": map[string]any{"content": []any{}}})
++	}))
++	defer up.Close()
++	g, s, dir := testGateway(t, i, up.URL)
++	resource := s.URL + "/mcp/remote"
++	call := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{}}}`
++	status, headers, _ := gatewayRequest(t, s.Client(), "POST", resource, "", call)
++	if status != 401 || !strings.Contains(headers.Get("WWW-Authenticate"), "/.well-known/oauth-protected-resource/mcp/remote") {
++		t.Fatal(status, headers)
++	}
++	status, _, body := gatewayRequest(t, s.Client(), "GET", s.URL+"/.well-known/oauth-protected-resource/mcp/remote", "", "")
++	if status != 200 || !strings.Contains(body, resource) || !strings.Contains(body, i.URL) {
++		t.Fatal(status, body)
++	}
++	for name, edit := range map[string]func(jwt.MapClaims){
++		"audience":       func(c jwt.MapClaims) { c["aud"] = s.URL + "/mcp/other" },
++		"expired":        func(c jwt.MapClaims) { c["exp"] = time.Now().Add(-time.Minute).Unix() },
++		"missing-expiry": func(c jwt.MapClaims) { delete(c, "exp") },
++		"issuer":         func(c jwt.MapClaims) { c["iss"] = "https://evil.invalid" },
++		"future":         func(c jwt.MapClaims) { c["nbf"] = time.Now().Add(time.Hour).Unix() },
++	} {
++		t.Run(name, func(t *testing.T) {
++			raw := i.token("alice", resource, []string{"engineering"}, edit)
++			status, _, _ := gatewayRequest(t, s.Client(), "POST", resource, raw, call)
++			if status != 401 {
++				t.Fatal(status)
++			}
++		})
++	}
++	valid := i.token("alice", resource, []string{"engineering"}, nil)
++	badParts := strings.Split(valid, ".")
++	badParts[2] = strings.Repeat("A", len(badParts[2]))
++	status, _, _ = gatewayRequest(t, s.Client(), "POST", resource, strings.Join(badParts, "."), call)
++	if status != 401 || calls.Load() != 0 {
++		t.Fatal("invalid token reached upstream", status, calls.Load())
++	}
++	status, _, body = gatewayRequest(t, s.Client(), "POST", resource, valid, call)
++	if status != 200 || strings.Contains(body, `"error"`) || calls.Load() != 1 {
++		t.Fatal(status, body, calls.Load())
++	}
++	sales := i.token("bob", resource, []string{"sales"}, nil)
++	_, _, body = gatewayRequest(t, s.Client(), "POST", resource, sales, call)
++	if !strings.Contains(body, "does not permit") || calls.Load() != 1 {
++		t.Fatal(body, calls.Load())
++	}
++	_, _, body = gatewayRequest(t, s.Client(), "POST", resource, os.Getenv("FENCEPOST_GATEWAY_TEST_KEY"), call)
++	if strings.Contains(body, `"error"`) || calls.Load() != 2 {
++		t.Fatal(body)
++	}
++	status, headers, _ = gatewayRequest(t, s.Client(), "POST", resource, valid, `{"jsonrpc":"2.0","id":2,"method":"initialize","params":{}}`)
++	if status != 200 {
++		t.Fatal(status)
++	}
++	r, _ := http.NewRequest("GET", resource, nil)
++	r.Header.Set("Authorization", "Bearer "+sales)
++	r.Header.Set("Mcp-Session-Id", headers.Get("Mcp-Session-Id"))
++	resp, err := s.Client().Do(r)
++	if err != nil {
++		t.Fatal(err)
++	}
++	_ = resp.Body.Close()
++	if resp.StatusCode != 404 {
++		t.Fatal("cross-user session accepted", resp.StatusCode)
++	}
++	if err := os.WriteFile(filepath.Join(dir, "policy.yaml"), []byte("version: 1\nservers: {remote: {default: deny}}\n"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if err := g.policy.Refresh(context.Background()); err != nil {
++		t.Fatal(err)
++	}
++	_, _, body = gatewayRequest(t, s.Client(), "POST", resource, valid, call)
++	if !strings.Contains(body, "does not permit") {
++		t.Fatal("policy refresh not enforced", body)
++	}
++}
++
++func TestGatewayInboxBrowserFlow(t *testing.T) {
++	i := fakeIssuer(t)
++	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		var m map[string]json.RawMessage
++		_ = json.NewDecoder(r.Body).Decode(&m)
++		w.Header().Set("Content-Type", "application/json")
++		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": m["id"], "result": map[string]any{"content": []any{}}})
++	}))
++	defer up.Close()
++	g, s, dir := testGateway(t, i, up.URL)
++	jar, _ := cookiejar.New(nil)
++	client := &http.Client{Jar: jar, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
++	status, headers, _ := gatewayRequest(t, client, "GET", s.URL+"/login", "", "")
++	if status != 303 {
++		t.Fatal(status)
++	}
++	authURL, _ := url.Parse(headers.Get("Location"))
++	q := authURL.Query()
++	i.mu.Lock()
++	i.audience, i.challenge = q.Get("resource"), q.Get("code_challenge")
++	i.mu.Unlock()
++	if q.Get("code_challenge_method") != "S256" || q.Get("resource") != s.URL+"/approvals" {
++		t.Fatal(q)
++	}
++	callback := s.URL + "/callback?" + url.Values{"state": {q.Get("state")}, "code": {"ok"}, "iss": {i.URL}}.Encode()
++	status, _, _ = gatewayRequest(t, client, "GET", callback, "", "")
++	if status != 303 {
++		t.Fatal("sign-in failed", status)
++	}
++	status, _, _ = gatewayRequest(t, client, "GET", callback, "", "")
++	if status != 400 {
++		t.Fatal("callback replay accepted")
++	}
++	resource := s.URL + "/mcp/remote"
++	requester := i.token("alice", resource, []string{"engineering"}, nil)
++	done := make(chan string, 1)
++	go func() {
++		r, _ := http.NewRequest("POST", resource, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"write","arguments":{"text":"<script>alert(1)</script>"}}}`))
++		r.Header.Set("Authorization", "Bearer "+requester)
++		resp, err := s.Client().Do(r)
++		if err != nil {
++			done <- err.Error()
++			return
++		}
++		defer resp.Body.Close()
++		data, _ := io.ReadAll(resp.Body)
++		done <- string(data)
++	}()
++	var pending []item
++	deadline := time.Now().Add(3 * time.Second)
++	for time.Now().Before(deadline) {
++		status, _, body := gatewayRequest(t, client, "GET", s.URL+"/approvals/pending", "", "")
++		if status != 200 {
++			t.Fatal(status, body)
++		}
++		_ = json.Unmarshal([]byte(body), &pending)
++		if len(pending) > 0 {
++			break
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++	if len(pending) != 1 {
++		t.Fatal("missing pending request")
++	}
++	status, _, body := gatewayRequest(t, client, "GET", s.URL+"/approvals", "", "")
++	if status != 200 || strings.Contains(body, "<script>") || !strings.Contains(body, "alice") {
++		t.Fatal(status, body)
++	}
++	csrf := regexp.MustCompile(`name="csrf" value="([^"]+)"`).FindStringSubmatch(body)
++	if len(csrf) != 2 {
++		t.Fatal("missing CSRF token")
++	}
++	form := url.Values{"id": {pending[0].ID}, "decision": {"allow"}, "reason": {"reviewed by team"}, "csrf": {csrf[1]}}
++	r, _ := http.NewRequest("POST", s.URL+"/approvals/decision", strings.NewReader(form.Encode()))
++	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
++	r.Header.Set("Origin", s.URL)
++	resp, err := client.Do(r)
++	if err != nil {
++		t.Fatal(err)
++	}
++	_ = resp.Body.Close()
++	if resp.StatusCode != 303 {
++		t.Fatal(resp.StatusCode)
++	}
++	select {
++	case result := <-done:
++		if strings.Contains(result, `"error"`) {
++			t.Fatal(result)
++		}
++	case <-time.After(3 * time.Second):
++		t.Fatal("approval did not complete")
++	}
++	var events []audit.Event
++	_, err = audit.Verify(filepath.Join(dir, "fencepost-audit.jsonl"), func(e audit.Event) {
++		if e.Kind == "approval" {
++			events = append(events, e)
++		}
++	})
++	if err != nil || len(events) != 1 || events[0].Approver != "reviewer" || events[0].Reason != "reviewed by team" {
++		t.Fatal(err, events)
++	}
++	unprivileged := i.token("alice", s.URL+"/approvals", []string{"engineering"}, nil)
++	status, _, _ = gatewayRequest(t, client, "GET", s.URL+"/approvals", unprivileged, "")
++	if status != 403 {
++		t.Fatal("non-approver read inbox", status)
++	}
++	_, _, body = gatewayRequest(t, client, "GET", s.URL+"/approvals", "", "")
++	if !strings.Contains(body, "reviewer") || !strings.Contains(body, "reviewed by team") {
++		t.Fatal(body)
++	}
++	var diff bytes.Buffer
++	p, err := policy.Parse([]byte("version: 1\nservers: {remote: {default: deny}}\n"), dir)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if n, err := audit.PolicyDiff(g.policy.Current().Audit.Path, p, &diff); err != nil || n != 1 || !strings.Contains(diff.String(), `"before":"ask"`) {
++		t.Fatal(n, err, diff.String())
++	}
++}
++
++func TestInboxWebhookAndTimeout(t *testing.T) {
++	secret := strings.Repeat("test-secret-", 4)
++	t.Setenv("FENCEPOST_INBOX_WEBHOOK_TEST", secret)
++	seen := make(chan bool, 1)
++	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		data, _ := io.ReadAll(r.Body)
++		seen <- r.Header.Get("X-Fencepost-Signature") == approval.Signature([]byte(secret), data) && bytes.Contains(data, []byte("approval_url"))
++		w.WriteHeader(204)
++	}))
++	defer hook.Close()
++	in := newInbox(InboxConfig{WebhookURL: hook.URL, HMACSecretEnv: "FENCEPOST_INBOX_WEBHOOK_TEST"}, "https://gateway.example", nil)
++	answer := in.ask(context.Background(), policy.Approval{Timeout: "200ms"}, approval.Request{User: "alice", Server: "s", Tool: "write", Arguments: json.RawMessage("{}")})
++	if answer != "deny" {
++		t.Fatal(answer)
++	}
++	select {
++	case valid := <-seen:
++		if !valid {
++			t.Fatal("unsigned webhook")
++		}
++	default:
++		t.Fatal("webhook missing")
++	}
++	in.mu.Lock()
++	defer in.mu.Unlock()
++	if len(in.items) != 0 || len(in.history) != 1 || in.history[0].Decision != "expired" {
++		t.Fatal(fmt.Sprint(in.history))
++	}
++}
+diff --git a/internal/gateway/inbox.go b/internal/gateway/inbox.go
+new file mode 100644
+index 0000000..4f105e6
+--- /dev/null
++++ b/internal/gateway/inbox.go
+@@ -0,0 +1,197 @@
++package gateway
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"html/template"
++	"io"
++	"net/http"
++	"os"
++	"slices"
++	"sort"
++	"sync"
++	"time"
++
++	"github.com/RamazanKara/fencepost/internal/approval"
++	"github.com/RamazanKara/fencepost/internal/audit"
++	"github.com/RamazanKara/fencepost/internal/policy"
++	"github.com/RamazanKara/fencepost/internal/scan"
++)
++
++type InboxConfig struct {
++	Groups        []string `yaml:"groups"`
++	WebhookURL    string   `yaml:"webhook_url"`
++	HMACSecretEnv string   `yaml:"hmac_secret_env"`
++}
++type item struct {
++	approval.Request
++	Decision string `json:"decision"`
++	Approver string `json:"approver,omitempty"`
++	Reason   string `json:"reason,omitempty"`
++	reply    chan string
++	expires  time.Time
++}
++type inbox struct {
++	mu         sync.Mutex
++	items      map[string]*item
++	history    []item
++	config     InboxConfig
++	base, csrf string
++	log        *audit.Log
++}
++
++func newInbox(config InboxConfig, base string, log *audit.Log) *inbox {
++	return &inbox{items: map[string]*item{}, config: config, base: base, csrf: approval.Token(), log: log}
++}
++
++func (i *inbox) ask(ctx context.Context, config policy.Approval, request approval.Request) string {
++	timeout, _ := time.ParseDuration(config.Timeout)
++	ctx, cancel := context.WithTimeout(ctx, timeout)
++	defer cancel()
++	request.ID, request.Time = approval.Token(), time.Now().Unix()
++	if len(request.Arguments) > 64<<10 {
++		return "deny"
++	}
++	p := &item{Request: request, Decision: "pending", reply: make(chan string, 1), expires: time.Now().Add(timeout)}
++	i.mu.Lock()
++	if len(i.items) >= 128 {
++		i.mu.Unlock()
++		return "deny"
++	}
++	i.items[request.ID] = p
++	i.mu.Unlock()
++	defer func() {
++		i.mu.Lock()
++		defer i.mu.Unlock()
++		if p.Decision == "pending" {
++			p.Decision = "expired"
++		}
++		delete(i.items, request.ID)
++		copy := *p
++		copy.reply = nil
++		i.history = append(i.history, copy)
++		if len(i.history) > 256 {
++			i.history = i.history[1:]
++		}
++	}()
++	if i.config.WebhookURL != "" {
++		go i.notify(ctx, request)
++	}
++	select {
++	case answer := <-p.reply:
++		if ctx.Err() != nil || !time.Now().Before(p.expires) {
++			return "deny"
++		}
++		return answer
++	case <-ctx.Done():
++		return "deny"
++	}
++}
++
++func (i *inbox) notify(ctx context.Context, request approval.Request) {
++	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
++	defer cancel()
++	data, _ := json.Marshal(struct {
++		approval.Request
++		URL string `json:"approval_url"`
++	}{request, i.base + "/approvals"})
++	req, err := http.NewRequestWithContext(ctx, "POST", i.config.WebhookURL, bytes.NewReader(data))
++	if err != nil {
++		return
++	}
++	req.Header.Set("Content-Type", "application/json")
++	req.Header.Set("X-Fencepost-Signature", approval.Signature([]byte(os.Getenv(i.config.HMACSecretEnv)), data))
++	client := &http.Client{Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
++	defer client.CloseIdleConnections()
++	resp, err := client.Do(req)
++	decision := "sent"
++	if err != nil {
++		decision = "failed"
++	} else {
++		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
++		_ = resp.Body.Close()
++		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
++			decision = "failed"
++		}
++	}
++	if i.log != nil {
++		_ = i.log.Write(audit.Event{Kind: "approval_webhook", Session: request.Session, Server: request.Server, Tool: request.Tool, User: request.User, Decision: decision})
++	}
++}
++
++func (i *inbox) serve(w http.ResponseWriter, r *http.Request, identity policy.Identity) {
++	allowed := false
++	for _, group := range identity.Groups {
++		allowed = allowed || slices.Contains(i.config.Groups, group)
++	}
++	if !allowed {
++		http.Error(w, "Approver group required", http.StatusForbidden)
++		return
++	}
++	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
++	if r.Method == "POST" && r.URL.Path == "/approvals/decision" {
++		r.Body = http.MaxBytesReader(w, r.Body, 8192)
++		if r.ParseForm() != nil || r.PostForm.Get("csrf") != i.csrf {
++			http.Error(w, "Invalid form", 400)
++			return
++		}
++		decision, reason := r.PostForm.Get("decision"), r.PostForm.Get("reason")
++		if (decision != "allow" && decision != "deny") || len(reason) == 0 || len(reason) > 1024 {
++			http.Error(w, "Choose allow or deny and supply a reason of 1..1024 bytes", 400)
++			return
++		}
++		reason, _ = scan.RedactSecrets("", reason)
++		i.mu.Lock()
++		defer i.mu.Unlock()
++		p := i.items[r.PostForm.Get("id")]
++		if p == nil || !time.Now().Before(p.expires) {
++			http.Error(w, "Request expired", 404)
++			return
++		}
++		if p.Decision != "pending" {
++			http.Error(w, "Already decided", http.StatusConflict)
++			return
++		}
++		if i.log != nil {
++			if err := i.log.Write(audit.Event{Kind: "approval", Session: p.Session, Server: p.Server, Tool: p.Tool, User: p.User, Groups: p.Groups, Client: p.Client, Decision: decision, Approver: identity.User, Reason: reason}); err != nil {
++				http.Error(w, "Audit unavailable", http.StatusServiceUnavailable)
++				return
++			}
++		}
++		p.Decision, p.Approver, p.Reason = decision, identity.User, reason
++		p.reply <- decision
++		http.Redirect(w, r, "/approvals", http.StatusSeeOther)
++		return
++	}
++	if r.Method != "GET" || (r.URL.Path != "/approvals" && r.URL.Path != "/approvals/pending") {
++		http.NotFound(w, r)
++		return
++	}
++	i.mu.Lock()
++	items := make([]item, 0, len(i.items))
++	for _, p := range i.items {
++		items = append(items, *p)
++	}
++	history := append([]item(nil), i.history...)
++	i.mu.Unlock()
++	sort.Slice(items, func(a, b int) bool { return items[a].Time < items[b].Time })
++	if r.URL.Path == "/approvals/pending" {
++		w.Header().Set("Content-Type", "application/json")
++		_ = json.NewEncoder(w).Encode(items)
++		return
++	}
++	w.Header().Set("Content-Type", "text/html; charset=utf-8")
++	_ = inboxPage.Execute(w, struct {
++		User, CSRF       string
++		Pending, History []item
++	}{identity.User, i.csrf, items, history})
++}
++
++var inboxPage = template.Must(template.New("inbox").Funcs(template.FuncMap{"json": func(raw json.RawMessage) string { return string(raw) }}).Parse(`<!doctype html>
++<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Fencepost approval inbox</title>
++<style>body{font:16px system-ui;max-width:900px;margin:3rem auto;padding:0 1rem;color:#18251c;background:#f5f6f4}article{background:white;border:1px solid #c8d2cb;padding:1.5rem;margin:1rem 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}textarea{width:100%;box-sizing:border-box}button{padding:.7rem;margin:.4rem 0}</style>
++<h1>Approval inbox</h1><p>Signed in as {{.User}}. <a href="/approvals">Refresh</a></p>
++{{range .Pending}}<article><h2>{{.Server}} / {{.Tool}}</h2><p>Requested by {{.User}} via {{.Client}} · {{.Decision}}</p><pre>{{json .Arguments}}</pre>
++<form method="post" action="/approvals/decision"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><label>Reason<textarea name="reason" required maxlength="1024"></textarea></label><button name="decision" value="allow">Approve once</button> <button name="decision" value="deny">Deny</button></form></article>{{else}}<p>No pending requests.</p>{{end}}
++<h2>Recent decisions</h2>{{range .History}}<article><b>{{.Server}} / {{.Tool}}: {{.Decision}}</b><p>{{.Approver}} · {{.Reason}}</p></article>{{else}}<p>No recent decisions.</p>{{end}}</html>`))
+diff --git a/internal/policy/policy.go b/internal/policy/policy.go
+index 2013447..b8b455b 100644
+--- a/internal/policy/policy.go
++++ b/internal/policy/policy.go
+@@ -34,6 +34,15 @@ type Tool struct {
+ 	Action    string     `yaml:"action"`
+ 	Arguments []Argument `yaml:"arguments,omitempty"`
+ 	RateLimit int        `yaml:"rate_limit,omitempty"`
++	Users     []string   `yaml:"users,omitempty"`
++	Groups    []string   `yaml:"groups,omitempty"`
++	Clients   []string   `yaml:"clients,omitempty"`
++}
++
++type Identity struct {
++	User   string   `json:"user" yaml:"user"`
++	Groups []string `json:"groups,omitempty" yaml:"groups"`
++	Client string   `json:"client,omitempty" yaml:"client"`
+ }
+ 
+ type Argument struct {
+@@ -62,11 +71,21 @@ type Approval struct {
+ }
+ 
+ type Audit struct {
+-	Path         string `yaml:"path"`
+-	OTLPEndpoint string `yaml:"otlp_endpoint"`
++	Path             string `yaml:"path"`
++	OTLPEndpoint     string `yaml:"otlp_endpoint"`
++	RecordArguments  bool   `yaml:"record_arguments"`
++	Stdout           bool   `yaml:"stdout"`
++	ExportFile       string `yaml:"export_file"`
++	MaxBytes         int64  `yaml:"max_bytes"`
++	Backups          int    `yaml:"backups"`
++	OTLPLogsEndpoint string `yaml:"otlp_logs_endpoint"`
++	Syslog           string `yaml:"syslog"`
+ }
+ 
+ func Read(filename string) (*Policy, error) {
++	if info, err := os.Stat(filename); err == nil && info.IsDir() {
++		return readDirectory(filename)
++	}
+ 	data, err := os.ReadFile(filename)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("%s: cannot read policy: %w", filename, err)
+@@ -139,14 +158,42 @@ func Parse(data []byte, base string) (*Policy, error) {
+ 	if p.Audit.OTLPEndpoint != "" && !SafeEndpoint(p.Audit.OTLPEndpoint) {
+ 		return nil, at("OTLP endpoint requires HTTPS or literal loopback HTTP", "audit", "otlp_endpoint")
+ 	}
++	if p.Audit.OTLPLogsEndpoint != "" && !SafeEndpoint(p.Audit.OTLPLogsEndpoint) {
++		return nil, at("OTLP logs endpoint requires HTTPS or literal loopback HTTP", "audit", "otlp_logs_endpoint")
++	}
++	if p.Audit.MaxBytes < 0 || p.Audit.Backups < 0 || p.Audit.Backups > 100 {
++		return nil, at("audit max_bytes must be nonnegative; backups must be 0..100", "audit")
++	}
++	if p.Audit.ExportFile != "" {
++		p.Audit.ExportFile = absolute(base, p.Audit.ExportFile)
++		if p.Audit.MaxBytes == 0 {
++			p.Audit.MaxBytes = 10 << 20
++		}
++		if p.Audit.Backups == 0 {
++			p.Audit.Backups = 5
++		}
++	}
+ 	p.Approval.LocalFile = absolute(base, p.Approval.LocalFile)
+ 	p.Audit.Path = absolute(base, p.Audit.Path)
++	if p.Audit.ExportFile != "" && p.Audit.ExportFile == p.Audit.Path {
++		return nil, at("audit export_file must differ from the authoritative log", "audit", "export_file")
++	}
+ 	for name, server := range p.Servers {
+ 		if name == "" || !action(server.Default) {
+ 			return nil, at("each server requires a name and default allow, deny, or ask", "servers", name, "default")
+ 		}
+ 		for i := range server.Tools {
+ 			t := &server.Tools[i]
++			for _, values := range [][]string{t.Users, t.Groups, t.Clients} {
++				if values != nil && len(values) == 0 {
++					return nil, at("identity lists must be nonempty", "servers", name, "tools", strconv.Itoa(i))
++				}
++				for _, value := range values {
++					if value == "" {
++						return nil, at("identity values must be nonempty", "servers", name, "tools", strconv.Itoa(i))
++					}
++				}
++			}
+ 			if _, err := path.Match(t.Name, ""); err != nil || t.Name == "" {
+ 				return nil, at("invalid tool name glob", "servers", name, "tools", strconv.Itoa(i), "name")
+ 			}
+@@ -273,11 +320,18 @@ func absolute(base, name string) string {
+ func action(s string) bool { return s == "allow" || s == "deny" || s == "ask" }
+ 
+ func (p *Policy) Match(server, tool string, args map[string]any) (string, string, int) {
++	return p.MatchIdentity(server, tool, args, Identity{})
++}
++
++func (p *Policy) MatchIdentity(server, tool string, args map[string]any, identity Identity) (string, string, int) {
+ 	s, ok := p.Servers[server]
+ 	if !ok {
+ 		return "deny", "server", 0
+ 	}
+ 	for i, t := range s.Tools {
++		if !identityMatches(t.Users, []string{identity.User}) || !identityMatches(t.Groups, identity.Groups) || !identityMatches(t.Clients, []string{identity.Client}) {
++			continue
++		}
+ 		if matched, _ := path.Match(t.Name, tool); !matched {
+ 			continue
+ 		}
+@@ -291,3 +345,17 @@ func (p *Policy) Match(server, tool string, args map[string]any) (string, string
+ 	}
+ 	return s.Default, "default", 0
+ }
++
++func identityMatches(required, actual []string) bool {
++	if required == nil {
++		return true
++	}
++	for _, want := range required {
++		for _, value := range actual {
++			if want == value {
++				return true
++			}
++		}
++	}
++	return false
++}
+diff --git a/internal/policy/schema_test.go b/internal/policy/schema_test.go
+index 6435fd8..1e5b59e 100644
+--- a/internal/policy/schema_test.go
++++ b/internal/policy/schema_test.go
+@@ -18,6 +18,7 @@ func TestExampleSchemas(t *testing.T) {
+ 	if err != nil || len(paths) != 3 {
+ 		t.Fatal(paths, err)
+ 	}
++	paths = append(paths, "../../examples/gateway/policy.yaml", "../../examples/agentworkflows/policy.yaml")
+ 	for _, path := range paths {
+ 		t.Run(filepath.Base(path), func(t *testing.T) {
+ 			data, err := os.ReadFile(path)
+diff --git a/internal/policy/source.go b/internal/policy/source.go
+new file mode 100644
+index 0000000..2afb3ea
+--- /dev/null
++++ b/internal/policy/source.go
+@@ -0,0 +1,198 @@
++package policy
++
++import (
++	"bytes"
++	"context"
++	"crypto/ed25519"
++	"crypto/sha256"
++	"encoding/base64"
++	"errors"
++	"fmt"
++	"io"
++	"net/http"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"time"
++
++	"gopkg.in/yaml.v3"
++)
++
++func readDirectory(dir string) (*Policy, error) {
++	entries, err := os.ReadDir(dir)
++	if err != nil {
++		return nil, err
++	}
++	merged := map[string]any{}
++	for _, entry := range entries {
++		if entry.IsDir() || (filepath.Ext(entry.Name()) != ".yaml" && filepath.Ext(entry.Name()) != ".yml") {
++			continue
++		}
++		name := filepath.Join(dir, entry.Name())
++		data, err := os.ReadFile(name)
++		if err != nil {
++			return nil, err
++		}
++		var node yaml.Node
++		if err := yaml.Unmarshal(data, &node); err != nil {
++			return nil, fmt.Errorf("%s: %w", name, yamlError(err, "invalid YAML"))
++		}
++		if invalidNode(&node, false) != nil {
++			return nil, fmt.Errorf("%s: null is only allowed inside enum values", name)
++		}
++		var fragment map[string]any
++		decoder := yaml.NewDecoder(bytes.NewReader(data))
++		if err := decoder.Decode(&fragment); err != nil {
++			return nil, fmt.Errorf("%s: invalid policy fragment", name)
++		}
++		var extra any
++		if decoder.Decode(&extra) != io.EOF {
++			return nil, fmt.Errorf("%s: expected one document", name)
++		}
++		merge(merged, fragment)
++	}
++	data, err := yaml.Marshal(merged)
++	if err != nil {
++		return nil, err
++	}
++	base, err := filepath.Abs(dir)
++	if err != nil {
++		return nil, err
++	}
++	p, err := Parse(data, base)
++	if err != nil {
++		return nil, fmt.Errorf("%s (merged): %w", dir, err)
++	}
++	return p, nil
++}
++
++func merge(dst, src map[string]any) {
++	for key, value := range src {
++		old, ok := dst[key].(map[string]any)
++		next, nested := value.(map[string]any)
++		if ok && nested {
++			merge(old, next)
++		} else {
++			dst[key] = value
++		}
++	}
++}
++
++type SourceConfig struct {
++	Source       string `yaml:"source"`
++	PublicKey    string `yaml:"public_key"`
++	PollInterval string `yaml:"poll_interval"`
++}
++
++type Source struct {
++	current    atomic.Pointer[Policy]
++	mu         sync.Mutex
++	config     SourceConfig
++	base, etag string
++	key        ed25519.PublicKey
++	client     *http.Client
++	interval   time.Duration
++	digest     [32]byte
++}
++
++func LoadSource(ctx context.Context, config SourceConfig, base string) (*Source, error) {
++	s := &Source{config: config, base: base, interval: time.Minute,
++		client: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
++	if config.PollInterval != "" {
++		var err error
++		s.interval, err = time.ParseDuration(config.PollInterval)
++		if err != nil || s.interval < time.Second {
++			return nil, errors.New("policy poll_interval must be at least 1s")
++		}
++	}
++	if strings.HasPrefix(config.Source, "https://") {
++		key, err := base64.StdEncoding.DecodeString(config.PublicKey)
++		if err != nil || len(key) != ed25519.PublicKeySize || !SafeEndpoint(config.Source) {
++			return nil, errors.New("remote policy requires HTTPS and a base64 ed25519 public_key")
++		}
++		s.key = key
++	} else {
++		if strings.Contains(config.Source, "://") || config.Source == "" {
++			return nil, errors.New("policy source must be a file, directory, or signed HTTPS URL")
++		}
++		s.config.Source = absolute(base, config.Source)
++	}
++	if err := s.Refresh(ctx); err != nil {
++		return nil, err
++	}
++	return s, nil
++}
++
++func (s *Source) Current() *Policy { return s.current.Load() }
++
++func (s *Source) Refresh(ctx context.Context) error {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	var p *Policy
++	var err error
++	etag := ""
++	if s.key == nil {
++		p, err = Read(s.config.Source)
++	} else {
++		req, err := http.NewRequestWithContext(ctx, "GET", s.config.Source, nil)
++		if err != nil {
++			return err
++		}
++		if s.etag != "" {
++			req.Header.Set("If-None-Match", s.etag)
++		}
++		resp, err := s.client.Do(req)
++		if err != nil {
++			return errors.New("policy fetch failed")
++		}
++		defer resp.Body.Close()
++		if resp.StatusCode == http.StatusNotModified && s.Current() != nil {
++			return nil
++		}
++		if resp.StatusCode != http.StatusOK {
++			return errors.New("policy fetch returned unexpected status")
++		}
++		data, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
++		if err != nil || len(data) > 1<<20 {
++			return errors.New("policy response exceeds limit or is incomplete")
++		}
++		signature, err := base64.StdEncoding.DecodeString(resp.Header.Get("X-Fencepost-Signature"))
++		if err != nil || !ed25519.Verify(s.key, data, signature) {
++			return errors.New("policy signature verification failed")
++		}
++		p, err = Parse(data, s.base)
++		if err != nil {
++			return err
++		}
++		etag = resp.Header.Get("ETag")
++	}
++	if err != nil {
++		return err
++	}
++	encoded, _ := yaml.Marshal(p)
++	digest := sha256.Sum256(encoded)
++	if s.Current() == nil || digest != s.digest {
++		s.current.Store(p)
++		s.digest = digest
++	}
++	s.etag = etag
++	return nil
++}
++
++func (s *Source) Poll(ctx context.Context, report func(error)) {
++	ticker := time.NewTicker(s.interval)
++	defer ticker.Stop()
++	defer s.client.CloseIdleConnections()
++	for {
++		select {
++		case <-ctx.Done():
++			return
++		case <-ticker.C:
++			if err := s.Refresh(ctx); err != nil {
++				report(err)
++			}
++		}
++	}
++}
+diff --git a/internal/policy/source_test.go b/internal/policy/source_test.go
+new file mode 100644
+index 0000000..31e5543
+--- /dev/null
++++ b/internal/policy/source_test.go
+@@ -0,0 +1,122 @@
++package policy
++
++import (
++	"context"
++	"crypto/ed25519"
++	"crypto/rand"
++	"encoding/base64"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++func TestDirectoryMergeAndIdentity(t *testing.T) {
++	dir := t.TempDir()
++	files := map[string]string{
++		"10-base.yaml": "version: 1\nservers:\n  s:\n    default: deny\n    tools:\n      - {name: '*', action: deny}\noutput:\n  max_bytes: 2048\n",
++		"20-team.yml":  "servers:\n  s:\n    tools:\n      - {name: echo, action: allow, users: [alice], groups: [engineering], clients: [workflow]}\noutput:\n  injection: block\n",
++	}
++	for name, data := range files {
++		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0600); err != nil {
++			t.Fatal(err)
++		}
++	}
++	p, err := Read(dir)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if p.Output.MaxBytes != 2048 || p.Output.Injection != "block" || len(p.Servers["s"].Tools) != 1 {
++		t.Fatalf("%+v", p)
++	}
++	for _, test := range []struct {
++		id   Identity
++		want string
++	}{
++		{Identity{User: "alice", Groups: []string{"engineering"}, Client: "workflow"}, "allow"},
++		{Identity{User: "bob", Groups: []string{"engineering"}, Client: "workflow"}, "deny"},
++		{Identity{User: "alice", Groups: []string{"sales"}, Client: "workflow"}, "deny"},
++		{Identity{User: "alice", Groups: []string{"engineering"}, Client: "spoof"}, "deny"},
++		{Identity{}, "deny"},
++	} {
++		action, _, _ := p.MatchIdentity("s", "echo", nil, test.id)
++		if action != test.want {
++			t.Errorf("%+v: %s", test.id, action)
++		}
++	}
++	if err := os.WriteFile(filepath.Join(dir, "30-invalid.yaml"), []byte("servers:\n  s:\n    unexpected: true\n"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := Read(dir); err == nil {
++		t.Fatal("unknown field accepted")
++	}
++}
++
++func TestSignedPolicyFetch(t *testing.T) {
++	public, private, err := ed25519.GenerateKey(rand.Reader)
++	if err != nil {
++		t.Fatal(err)
++	}
++	data := []byte("version: 1\nservers: {s: {default: deny}}\n")
++	etag, mode := "\"one\"", "valid"
++	conditional := ""
++	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		conditional = r.Header.Get("If-None-Match")
++		if mode == "unchanged" {
++			w.WriteHeader(304)
++			return
++		}
++		if mode == "redirect" {
++			http.Redirect(w, r, "https://example.invalid", http.StatusFound)
++			return
++		}
++		w.Header().Set("ETag", etag)
++		w.Header().Set("X-Fencepost-Signature", base64.StdEncoding.EncodeToString(ed25519.Sign(private, data)))
++		if mode == "tampered" {
++			_, _ = w.Write([]byte(strings.ReplaceAll(string(data), "deny", "allow")))
++			return
++		}
++		_, _ = w.Write(data)
++	}))
++	defer server.Close()
++	client := server.Client()
++	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
++	s := &Source{config: SourceConfig{Source: server.URL}, base: t.TempDir(), key: public, client: client}
++	ctx := context.Background()
++	if err := s.Refresh(ctx); err != nil {
++		t.Fatal(err)
++	}
++	first := s.Current()
++	mode = "unchanged"
++	if err := s.Refresh(ctx); err != nil || conditional != etag || s.Current() != first {
++		t.Fatal(err, conditional)
++	}
++	mode = "tampered"
++	etag = "\"two\""
++	if err := s.Refresh(ctx); err == nil || s.Current() != first || s.etag != "\"one\"" {
++		t.Fatal("tampered policy replaced trusted state", err)
++	}
++	mode = "valid"
++	data = []byte("version: 1\nservers: {s: {default: allow}}\n")
++	if err := s.Refresh(ctx); err != nil || s.Current().Servers["s"].Default != "allow" {
++		t.Fatal(err)
++	}
++	second := s.Current()
++	if err := s.Refresh(ctx); err != nil || s.Current() != second {
++		t.Fatal("unchanged body reset policy", err)
++	}
++	mode = "redirect"
++	if err := s.Refresh(ctx); err == nil || s.Current() != second {
++		t.Fatal("redirect accepted")
++	}
++	mode = "valid"
++	data = []byte("version: 2\n")
++	if err := s.Refresh(ctx); err == nil || s.Current() != second {
++		t.Fatal("invalid signed policy accepted")
++	}
++	if _, err := LoadSource(ctx, SourceConfig{Source: "http://127.0.0.1/policy"}, t.TempDir()); err == nil {
++		t.Fatal("unsigned HTTP policy accepted")
++	}
++}
+diff --git a/internal/proxy/engine.go b/internal/proxy/engine.go
+index f287f39..04d6f5a 100644
+--- a/internal/proxy/engine.go
++++ b/internal/proxy/engine.go
+@@ -28,6 +28,10 @@ type Request struct {
+ 
+ type Engine struct {
+ 	Policy                          *policy.Policy
++	PolicySource                    func() *policy.Policy
++	Identity                        policy.Identity
++	Approve                         func(context.Context, policy.Approval, approval.Request) string
++	requestContext                  func(mcp.Message) context.Context
+ 	Log                             *audit.Log
+ 	ServerName, SessionID, lockPath string
+ 	mu                              sync.Mutex
+@@ -39,6 +43,7 @@ type Engine struct {
+ 	rates                           map[string][]time.Time
+ 	rateSweep                       time.Time
+ 	always                          map[string]bool
++	grantPolicy                     *policy.Policy
+ }
+ 
+ func New(p *policy.Policy, log *audit.Log, server, lockPath string) (*Engine, error) {
+@@ -55,10 +60,20 @@ func (e *Engine) record(kind, method, tool, decision, rule string, redactions ma
+ 	if e.Log == nil {
+ 		return nil
+ 	}
+-	return e.Log.Write(audit.Event{Session: e.SessionID, Kind: kind, Server: e.ServerName, Method: method, Tool: tool, Decision: decision, Rule: rule, Redactions: redactions})
++	return e.Log.Write(audit.Event{Session: e.SessionID, Kind: kind, Server: e.ServerName, Method: method, Tool: tool, Decision: decision, Rule: rule, Redactions: redactions, User: e.Identity.User, Groups: e.Identity.Groups, Client: e.Identity.Client})
++}
++
++func (e *Engine) currentPolicy() *policy.Policy {
++	if e.PolicySource != nil {
++		return e.PolicySource()
++	}
++	return e.Policy
+ }
+ 
+ func (e *Engine) Begin(ctx context.Context, m mcp.Message) (*Request, error) {
++	if e.requestContext != nil && m.String("method") != "" && m.Fields["id"] != nil {
++		ctx = e.requestContext(m)
++	}
+ 	// Re-encode the parsed envelope so duplicate JSON keys cannot produce different
+ 	// routing decisions in the proxy and the upstream parser.
+ 	m, err := mcp.Encode(m.Fields)
+@@ -163,7 +178,22 @@ func (e *Engine) Check(r *Request) (*mcp.Message, error) {
+ 	if r.Message.Fields["id"] == nil {
+ 		return deny("Tool calls require a request ID.", "notification")
+ 	}
+-	action, rule, rate := e.Policy.Match(e.ServerName, r.tool, r.args)
++	p := e.currentPolicy()
++	action, rule, rate := p.MatchIdentity(e.ServerName, r.tool, r.args, e.Identity)
++	if e.Log != nil {
++		event := audit.Event{Session: e.SessionID, Kind: "policy", Method: r.method, Server: e.ServerName, Tool: r.tool, Decision: action, Rule: rule, User: e.Identity.User, Groups: e.Identity.Groups, Client: e.Identity.Client}
++		if p.Audit.RecordArguments {
++			args, hits, _ := scrubValue(r.args, "", true)
++			data, _ := json.Marshal(args)
++			if len(data) <= 16<<10 {
++				event.Arguments, event.Replayable = data, len(hits) == 0
++			}
++		}
++		if err := e.Log.Write(event); err != nil {
++			e.finish(r)
++			return nil, err
++		}
++	}
+ 	if action == "deny" {
+ 		if strings.Contains(rule, "/argument:") {
+ 			return deny("Tool arguments are outside the permitted scope.", rule)
+@@ -171,6 +201,10 @@ func (e *Engine) Check(r *Request) (*mcp.Message, error) {
+ 		return deny("Fencepost policy does not permit this tool.", rule)
+ 	}
+ 	e.mu.Lock()
++	if e.grantPolicy != p {
++		e.always = map[string]bool{}
++		e.grantPolicy = p
++	}
+ 	if !e.pinned {
+ 		if _, err := os.Stat(e.lockPath); !errors.Is(err, os.ErrNotExist) {
+ 			e.pinned = true
+@@ -190,12 +224,19 @@ func (e *Engine) Check(r *Request) (*mcp.Message, error) {
+ 		}
+ 		args, _, _ := scrubValue(r.args, "", true)
+ 		data, _ := json.Marshal(args)
+-		answer := approval.Ask(r.Context, e.Policy.Approval, approval.Request{Session: e.SessionID, Server: e.ServerName, Tool: r.tool, Arguments: data})
++		ask := e.Approve
++		if ask == nil {
++			ask = approval.Ask
++		}
++		answer := ask(r.Context, p.Approval, approval.Request{Session: e.SessionID, Server: e.ServerName, Tool: r.tool, Arguments: data, User: e.Identity.User, Groups: e.Identity.Groups, Client: e.Identity.Client})
+ 		if answer == "deny" {
+ 			return deny("Approval was denied or timed out.", "approval")
+ 		}
+ 		approvedAlways = answer == "always"
+-		if action, rule, _ := e.Policy.Match(e.ServerName, r.tool, r.args); action == "deny" {
++		if e.currentPolicy() != p {
++			return deny("Policy changed while awaiting approval; retry the call.", "policy_changed")
++		}
++		if action, rule, _ := p.MatchIdentity(e.ServerName, r.tool, r.args, e.Identity); action == "deny" {
+ 			return deny("Tool arguments changed while awaiting approval.", rule)
+ 		}
+ 	}
+@@ -205,7 +246,7 @@ func (e *Engine) Check(r *Request) (*mcp.Message, error) {
+ 		reason, hit = "Tool call was cancelled.", "cancelled"
+ 	} else if e.pinned && !e.trusted[r.tool] {
+ 		reason, hit = "Tool definition changed; list tools again after reviewing the pin.", "pin"
+-	} else if e.Policy.SessionBudget > 0 && e.used >= e.Policy.SessionBudget {
++	} else if p.SessionBudget > 0 && e.used >= p.SessionBudget {
+ 		reason, hit = "Session tool-call budget exhausted.", "budget"
+ 	}
+ 	now := time.Now()
+diff --git a/internal/proxy/http.go b/internal/proxy/http.go
+index e30bfc4..e5977c4 100644
+--- a/internal/proxy/http.go
++++ b/internal/proxy/http.go
+@@ -26,6 +26,7 @@ type HTTP struct {
+ 	headers  map[string]string
+ 	mu       sync.Mutex
+ 	sessions map[string]*Engine
++	Gateway  bool
+ }
+ 
+ func NewHTTP(p *policy.Policy, log *audit.Log, server, lockPath, upstream string, headers map[string]string) (*HTTP, error) {
+@@ -39,7 +40,20 @@ func NewHTTP(p *policy.Policy, log *audit.Log, server, lockPath, upstream string
+ 	return &HTTP{base: e, upstream: upstream, headers: headers, sessions: map[string]*Engine{}, client: &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 30 * time.Second}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+ }
+ 
+-func (h *HTTP) Close() { h.client.CloseIdleConnections() }
++func (h *HTTP) Close() {
++	h.client.CloseIdleConnections()
++	h.base.Fail()
++	h.mu.Lock()
++	defer h.mu.Unlock()
++	for _, e := range h.sessions {
++		e.Fail()
++	}
++}
++
++func (h *HTTP) Configure(identity policy.Identity, source func() *policy.Policy, ask func(context.Context, policy.Approval, approval.Request) string) {
++	h.Gateway = true
++	h.base.Identity, h.base.PolicySource, h.base.Approve = identity, source, ask
++}
+ 
+ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 	if r.Header.Get("Origin") != "" {
+@@ -86,6 +100,7 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 				http.Error(w, "Pin baseline unavailable", http.StatusServiceUnavailable)
+ 				return
+ 			}
++			e.Identity, e.PolicySource, e.Approve = h.base.Identity, h.base.PolicySource, h.base.Approve
+ 		}
+ 		request, err = e.Begin(r.Context(), message)
+ 		if err != nil {
+@@ -113,6 +128,15 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 		return
+ 	}
+ 	copyHeaders(upstream.Header, r.Header)
++	if h.Gateway {
++		upstream.Header.Del("Authorization")
++		upstream.Header.Del("Cookie")
++		for key := range upstream.Header {
++			if strings.HasPrefix(strings.ToLower(key), "x-") || strings.EqualFold(key, "Forwarded") {
++				upstream.Header.Del(key)
++			}
++		}
++	}
+ 	for key, value := range h.headers {
+ 		upstream.Header.Set(key, value)
+ 	}
+@@ -145,6 +169,11 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 		h.mu.Unlock()
+ 	}
+ 	copyHeaders(w.Header(), response.Header)
++	if h.Gateway {
++		w.Header().Del("Set-Cookie")
++		w.Header().Del("WWW-Authenticate")
++		w.Header().Del("Location")
++	}
+ 	w.Header().Del("Content-Length")
+ 	w.Header().Del("Content-Encoding")
+ 	w.Header().Del("ETag")
+diff --git a/internal/proxy/output.go b/internal/proxy/output.go
+index 70faffd..cd359e8 100644
+--- a/internal/proxy/output.go
++++ b/internal/proxy/output.go
+@@ -53,6 +53,7 @@ func scrubValue(value any, key string, redact bool) (any, map[string]int, bool)
+ }
+ 
+ func (e *Engine) output(m mcp.Message, tool string) (mcp.Message, error) {
++	p := e.currentPolicy()
+ 	field := "result"
+ 	if m.Fields["error"] != nil {
+ 		field = "error"
+@@ -63,7 +64,7 @@ func (e *Engine) output(m mcp.Message, tool string) (mcp.Message, error) {
+ 	if decoder.Decode(&value) != nil {
+ 		return Error(m, -32603, "Invalid upstream result."), nil
+ 	}
+-	clean, hits, injection := scrubValue(value, "", e.Policy.Output.RedactSecrets)
++	clean, hits, injection := scrubValue(value, "", p.Output.RedactSecrets)
+ 	if len(hits) > 0 {
+ 		if err := e.record("redaction", "tools/call", tool, "", "FP005", hits); err != nil {
+ 			return m, err
+@@ -73,7 +74,7 @@ func (e *Engine) output(m mcp.Message, tool string) (mcp.Message, error) {
+ 		if err := e.record("rule_hit", "tools/call", tool, "", "FP001", nil); err != nil {
+ 			return m, err
+ 		}
+-		if e.Policy.Output.Injection == "block" || field == "error" {
++		if p.Output.Injection == "block" || field == "error" {
+ 			if err := e.record("decision", "tools/call", tool, "deny", "FP001", nil); err != nil {
+ 				return m, err
+ 			}
+@@ -87,7 +88,7 @@ func (e *Engine) output(m mcp.Message, tool string) (mcp.Message, error) {
+ 	if err != nil {
+ 		return m, err
+ 	}
+-	if len(raw) > e.Policy.Output.MaxBytes {
++	if len(raw) > p.Output.MaxBytes {
+ 		if err := e.record("rule_hit", "tools/call", tool, "", "max_bytes", nil); err != nil {
+ 			return m, err
+ 		}
+diff --git a/internal/proxy/stdio_http.go b/internal/proxy/stdio_http.go
+new file mode 100644
+index 0000000..f6e4d58
+--- /dev/null
++++ b/internal/proxy/stdio_http.go
+@@ -0,0 +1,190 @@
++package proxy
++
++import (
++	"bufio"
++	"context"
++	"fmt"
++	"io"
++	"net/http"
++	"sync"
++
++	"github.com/RamazanKara/fencepost/internal/clientconfig"
++	"github.com/RamazanKara/fencepost/internal/mcp"
++)
++
++type StdioHTTP struct {
++	ctx      context.Context
++	cancel   context.CancelFunc
++	in       *io.PipeWriter
++	writes   sync.Mutex
++	mu       sync.Mutex
++	pending  map[string]chan mcp.Message
++	contexts map[string]context.Context
++	events   chan mcp.Message
++	stream   bool
++	done     chan struct{}
++	once     sync.Once
++}
++
++func NewStdioHTTP(ctx context.Context, e *Engine, s clientconfig.Server) *StdioHTTP {
++	ctx, cancel := context.WithCancel(ctx)
++	input, in := io.Pipe()
++	output, out := io.Pipe()
++	h := &StdioHTTP{ctx: ctx, cancel: cancel, in: in, pending: map[string]chan mcp.Message{}, events: make(chan mcp.Message, 64), done: make(chan struct{})}
++	h.contexts = map[string]context.Context{}
++	e.requestContext = func(m mcp.Message) context.Context {
++		h.mu.Lock()
++		defer h.mu.Unlock()
++		if request := h.contexts[m.ID()]; request != nil {
++			return request
++		}
++		// A disconnected HTTP request may still be queued in the stdio pipe.
++		expired, cancel := context.WithCancel(ctx)
++		cancel()
++		return expired
++	}
++	go func() {
++		defer cancel()
++		defer output.Close()
++		reader := bufio.NewReader(output)
++		for {
++			m, err := mcp.ReadFrame(reader)
++			if err != nil {
++				return
++			}
++			h.mu.Lock()
++			ch := h.pending[m.ID()]
++			if m.String("method") != "" {
++				ch = h.events
++				if !h.stream {
++					for _, active := range h.pending {
++						ch = active
++						break
++					}
++				}
++			}
++			if ch != nil {
++				select {
++				case ch <- m:
++				default:
++					h.mu.Unlock()
++					return
++				}
++			}
++			h.mu.Unlock()
++		}
++	}()
++	go func() {
++		defer close(h.done)
++		defer out.Close()
++		defer input.Close()
++		_ = Stdio(ctx, e, s, input, out)
++	}()
++	return h
++}
++
++func (h *StdioHTTP) Close() {
++	h.once.Do(func() { h.cancel(); _ = h.in.Close(); <-h.done })
++}
++
++func (h *StdioHTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
++	if r.Header.Get("Mcp-Session-Id") != "" {
++		http.Error(w, "Unknown session", 404)
++		return
++	}
++	select {
++	case <-h.ctx.Done():
++		http.Error(w, "Upstream disconnected", http.StatusServiceUnavailable)
++		return
++	default:
++	}
++	if r.Method == "GET" {
++		h.mu.Lock()
++		if h.stream {
++			h.mu.Unlock()
++			http.Error(w, "Stream already open", http.StatusConflict)
++			return
++		}
++		h.stream = true
++		h.mu.Unlock()
++		defer func() { h.mu.Lock(); h.stream = false; h.mu.Unlock() }()
++		h.streamMessages(w, r, h.events, "")
++		return
++	}
++	if r.Method != "POST" {
++		w.WriteHeader(405)
++		return
++	}
++	data, err := io.ReadAll(io.LimitReader(r.Body, mcp.MaxMessage+1))
++	if err != nil {
++		http.Error(w, "Invalid body", 400)
++		return
++	}
++	m, err := mcp.Parse(data)
++	if err != nil {
++		http.Error(w, "Invalid MCP message", 400)
++		return
++	}
++	var ch chan mcp.Message
++	if m.Fields["id"] != nil && m.String("method") != "" {
++		ch = make(chan mcp.Message, 64)
++		h.mu.Lock()
++		if h.pending[m.ID()] != nil || len(h.pending) >= 128 {
++			h.mu.Unlock()
++			http.Error(w, "Duplicate ID or busy", http.StatusConflict)
++			return
++		}
++		h.pending[m.ID()] = ch
++		h.contexts[m.ID()] = r.Context()
++		h.mu.Unlock()
++		defer func() { h.mu.Lock(); delete(h.pending, m.ID()); delete(h.contexts, m.ID()); h.mu.Unlock() }()
++	}
++	written := make(chan error, 1)
++	go func() { h.writes.Lock(); defer h.writes.Unlock(); written <- mcp.WriteFrame(h.in, m) }()
++	select {
++	case err := <-written:
++		if err != nil {
++			http.Error(w, "Upstream unavailable", http.StatusBadGateway)
++			return
++		}
++	case <-r.Context().Done():
++		h.cancel()
++		_ = h.in.Close()
++		return
++	case <-h.ctx.Done():
++		http.Error(w, "Upstream disconnected", http.StatusServiceUnavailable)
++		return
++	}
++	if ch == nil {
++		w.WriteHeader(202)
++		return
++	}
++	h.streamMessages(w, r, ch, m.ID())
++}
++
++func (h *StdioHTTP) streamMessages(w http.ResponseWriter, r *http.Request, ch <-chan mcp.Message, id string) {
++	w.Header().Set("Content-Type", "text/event-stream")
++	w.Header().Set("Cache-Control", "no-store")
++	w.WriteHeader(200)
++	if f, ok := w.(http.Flusher); ok {
++		f.Flush()
++	}
++	for {
++		select {
++		case m := <-ch:
++			if _, err := fmt.Fprintf(w, "event: message\ndata: %s\n\n", m.Raw); err != nil {
++				return
++			}
++			if f, ok := w.(http.Flusher); ok {
++				f.Flush()
++			}
++			if id != "" && m.String("method") == "" && m.ID() == id {
++				return
++			}
++		case <-r.Context().Done():
++			return
++		case <-h.ctx.Done():
++			return
++		}
++	}
++}
+diff --git a/internal/version/version.go b/internal/version/version.go
+index 5b024b7..6bd3924 100644
+--- a/internal/version/version.go
++++ b/internal/version/version.go
+@@ -1,6 +1,6 @@
+ package version
+ 
+-const Current = "0.1.0"
++const Current = "0.2.0"
+ 
+ var (
+ 	Version = Current
+diff --git a/schema/policy.schema.json b/schema/policy.schema.json
+index 570719e..16dc030 100644
+--- a/schema/policy.schema.json
++++ b/schema/policy.schema.json
+@@ -35,7 +35,14 @@
+       "type": "object", "additionalProperties": false,
+       "properties": {
+         "path": {"type": "string", "minLength": 1, "default": "fencepost-audit.jsonl"},
+-        "otlp_endpoint": {"type": "string", "format": "uri"}
++        "otlp_endpoint": {"type": "string", "format": "uri"},
++        "record_arguments": {"type": "boolean", "default": false},
++        "stdout": {"type": "boolean", "default": false},
++        "export_file": {"type": "string", "minLength": 1},
++        "max_bytes": {"type": "integer", "minimum": 0},
++        "backups": {"type": "integer", "minimum": 0, "maximum": 100},
++        "otlp_logs_endpoint": {"type": "string", "format": "uri"},
++        "syslog": {"type": "string", "pattern": "^(tcp|udp|tls)://"}
+       }
+     }
+   },
+@@ -54,6 +61,9 @@
+         "name": {"type": "string", "minLength": 1},
+         "action": {"$ref": "#/$defs/action"},
+         "rate_limit": {"type": "integer", "minimum": 0, "default": 0},
++        "users": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
++        "groups": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
++        "clients": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+         "arguments": {"type": "array", "items": {"$ref": "#/$defs/argument"}}
+       }
+     },
