@@ -189,3 +189,56 @@ func TestGeneratedRules(t *testing.T) {
 		t.Fatal("run go generate ./internal/scan")
 	}
 }
+
+func TestCredentialRedaction(t *testing.T) {
+	for _, tc := range []struct{ key, value, want string }{
+		{"password", "pw", "[redacted:secret]"},
+		{"api_key", "${TOKEN}", "[redacted:secret]"},
+		{"authorization", "<short-password>", "[redacted:secret]"},
+		{"credential", "ghp_abcdefghijklmnopqrstuvwxyz123456 and short-password", "[redacted:secret]"},
+		{"Cookie", "a=b", "[redacted:secret]"},
+		{"", "Authorization: Bearer opaque\nOK", "Authorization: [redacted:authorization]\nOK"},
+		{"", "proxy-authorization:\tBasic dTpw", "proxy-authorization: [redacted:authorization]"},
+		{"", "Cookie: sid=short; csrf=token\r\nOK", "Cookie: [redacted:cookie]\r\nOK"},
+		{"", "Set-Cookie: sid=short; HttpOnly\nOK", "Set-Cookie: [redacted:cookie]\nOK"},
+		{"", "See https://user:p%40ss@example.com/path", "See https://[redacted:userinfo]@example.com/path"},
+		{"", "postgres://u:pw@localhost/db", "postgres://[redacted:userinfo]@localhost/db"},
+		{"", "https://u:p@extra@host/path", "https://[redacted:userinfo]@host/path"},
+		{"", "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", "[redacted:private-key]"},
+		{"", "ghp_abcdefghijklmnopqrstuvwxyz123456 -----BEGIN PRIVATE KEY-----\nshort-fragment", "[redacted:secret]"},
+		{"", "normal text https://example.com/path user@example.com", "normal text https://example.com/path user@example.com"},
+		{"", "Bearer is an authentication scheme", "Bearer is an authentication scheme"},
+		{"password", "", ""},
+		{"password", "[redacted:secret]", "[redacted:secret]"},
+	} {
+		got, hits := RedactSecrets(tc.key, tc.value)
+		if got != tc.want {
+			t.Errorf("key %q: got %q want %q", tc.key, got, tc.want)
+		}
+		if got != tc.value && len(hits) == 0 {
+			t.Error("redaction was not counted")
+		}
+		if twice, _ := RedactSecrets(tc.key, got); twice != got {
+			t.Error("redaction is not stable")
+		}
+	}
+}
+
+func FuzzRedactSecrets(f *testing.F) {
+	for _, value := range []string{"hello", "Authorization: Bearer short", "Cookie: sid=a\r\nOK", "https://u:p@host/path", "-----BEGIN PRIVATE KEY-----\nabc", "ghp_abcdefghijklmnopqrstuvwxyz123456", "[redacted:secret]", "\xff"} {
+		f.Add("", value)
+		f.Add("password", value)
+	}
+	f.Fuzz(func(t *testing.T, key, value string) {
+		if len(key) > 1024 || len(value) > 16<<10 {
+			t.Skip()
+		}
+		got, hits := RedactSecrets(key, value)
+		if got != value && len(hits) == 0 {
+			t.Fatal("unreported redaction")
+		}
+		if twice, _ := RedactSecrets(key, got); twice != got {
+			t.Fatal("redaction is not stable")
+		}
+	})
+}

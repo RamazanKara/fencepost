@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -426,5 +428,180 @@ func TestRejectedToolNamesAreNotRetained(t *testing.T) {
 	}
 	if len(e.trusted) != 0 {
 		t.Fatalf("untrusted names retained: %d", len(e.trusted))
+	}
+}
+
+func TestToolBudgets(t *testing.T) {
+	e := engine(t, "    tools: [{name: '*', action: allow, budget: 2, rate_limit: 10}]\nsession_budget: 3\n")
+	for i, tc := range []struct{ tool, reason string }{
+		{"first", ""}, {"first", ""}, {"first", "Tool session budget"},
+		{"second", ""}, {"second", "Session tool-call budget"},
+	} {
+		r, denied := call(t, e, i, tc.tool)
+		if tc.reason == "" {
+			if denied != nil {
+				t.Fatal(string(denied.Raw))
+			}
+			e.finish(r)
+		} else if denied == nil || !strings.Contains(string(denied.Raw), tc.reason) {
+			t.Fatalf("call %d: %v", i, denied)
+		}
+	}
+	if e.used != 3 || e.toolUsed["first"] != 2 || e.toolUsed["second"] != 1 || len(e.rates["first"]) != 2 || len(e.rates["second"]) != 1 {
+		t.Fatalf("denials consumed counters: %d %v %v", e.used, e.toolUsed, e.rates)
+	}
+	denials := map[string]int{}
+	if _, err := audit.Verify(e.Policy.Audit.Path, func(event audit.Event) {
+		if event.Kind == "decision" && event.Decision == "deny" {
+			denials[event.Rule]++
+		}
+	}); err != nil || denials["tool_budget"] != 1 || denials["budget"] != 1 {
+		t.Fatal(denials, err)
+	}
+}
+
+func TestToolBudgetApprovalAndReload(t *testing.T) {
+	e := engine(t, "    tools: [{name: echo, action: ask, budget: 1}]\n")
+	asks := 0
+	e.Approve = func(context.Context, policy.Approval, approval.Request) string {
+		asks++
+		return "always"
+	}
+	for i, deniedWant := range []bool{false, true} {
+		r, denied := call(t, e, i, "echo")
+		if (denied != nil) != deniedWant {
+			t.Fatal(i, denied)
+		}
+		e.finish(r)
+	}
+	if asks != 1 {
+		t.Fatal("session approval was not reused", asks)
+	}
+	for i, tc := range []struct {
+		budget int
+		denied bool
+	}{{2, false}, {0, false}, {3, true}, {4, false}} {
+		p, err := policy.Parse([]byte(fmt.Sprintf("version: 1\nservers: {s: {default: deny, tools: [{name: echo, action: allow, budget: %d}]}}", tc.budget)), t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.PolicySource = func() *policy.Policy { return p }
+		r, denied := call(t, e, 10+i, "echo")
+		if (denied != nil) != tc.denied {
+			t.Fatalf("budget %d: %v", tc.budget, denied)
+		}
+		e.finish(r)
+	}
+	if e.toolUsed["echo"] != 4 {
+		t.Fatal(e.toolUsed)
+	}
+	fresh, err := New(e.currentPolicy(), nil, "s", e.lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, denied := call(t, fresh, 1, "echo"); denied != nil {
+		t.Fatal("new session retained the old budget")
+	}
+}
+
+func TestToolBudgetRejectedCalls(t *testing.T) {
+	e := engine(t, "    tools: [{name: echo, action: allow, budget: 2, rate_limit: 1}]\n")
+	_, _ = call(t, e, 1, "echo")
+	if _, denied := call(t, e, 2, "echo"); denied == nil {
+		t.Fatal("rate limit did not deny")
+	}
+	if e.toolUsed["echo"] != 1 {
+		t.Fatal("rate rejection consumed budget")
+	}
+	e.rates["echo"] = []time.Time{time.Now().Add(-2 * time.Minute)}
+	if _, denied := call(t, e, 3, "echo"); denied != nil {
+		t.Fatal(denied)
+	}
+	e.Fail()
+	if _, denied := call(t, e, 4, "echo"); denied == nil || !strings.Contains(string(denied.Raw), "Tool session budget") {
+		t.Fatal("upstream failure refunded an authorized call", denied)
+	}
+}
+
+func TestToolBudgetCapacity(t *testing.T) {
+	e := engine(t, "    tools: [{name: '*', action: allow, budget: 1}]\n")
+	for i := range 1024 {
+		e.toolUsed[fmt.Sprintf("tool%d", i)] = 0
+	}
+	if _, denied := call(t, e, 1, "overflow"); denied == nil || !strings.Contains(string(denied.Raw), "tracking capacity") {
+		t.Fatal(denied)
+	}
+	if len(e.toolUsed) != 1024 || e.used != 0 {
+		t.Fatal("rejected name retained")
+	}
+	if _, denied := call(t, e, 2, "tool0"); denied != nil {
+		t.Fatal("existing name denied", denied)
+	}
+}
+
+func TestConcurrentToolBudget(t *testing.T) {
+	e := engine(t, "    tools: [{name: echo, action: allow, budget: 7}]\n")
+	var workers sync.WaitGroup
+	var allowed atomic.Int32
+	for i := range 40 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			r, denied := call(t, e, i, "echo")
+			if denied == nil {
+				allowed.Add(1)
+				e.finish(r)
+			}
+		}()
+	}
+	workers.Wait()
+	if allowed.Load() != 7 || e.toolUsed["echo"] != 7 || e.used != 7 {
+		t.Fatalf("concurrent budget exceeded: %d %v %d", allowed.Load(), e.toolUsed, e.used)
+	}
+}
+
+func TestCredentialRedactionSurfaces(t *testing.T) {
+	for _, field := range []string{"result", "error"} {
+		t.Run(field, func(t *testing.T) {
+			e := engine(t, "audit: {record_arguments: true}\n")
+			args := map[string]any{"password": "tiny", "headers": []any{"Authorization: Bearer opaque", "Cookie: sid=short"}}
+			m, _ := mcp.Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "echo", "arguments": args}})
+			r, err := e.Begin(context.Background(), m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if denied, err := e.Check(r); err != nil || denied != nil {
+				t.Fatal(denied, err)
+			}
+			payload := map[string]any{"content": []any{map[string]any{"type": "text", "text": "Authorization: Bearer opaque"}}, "structuredContent": args}
+			if field == "error" {
+				payload = map[string]any{"code": -1, "message": "Cookie: sid=short", "data": args}
+			}
+			response, _ := mcp.Encode(map[string]any{"jsonrpc": "2.0", "id": 1, field: payload, "extension": true})
+			got, err := e.Server(response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, secret := range []string{"tiny", "opaque", "sid=short"} {
+				if strings.Contains(string(got.Raw), secret) {
+					t.Fatal("credential escaped", field)
+				}
+			}
+			if string(got.Fields["extension"]) != "true" {
+				t.Fatal("envelope lost")
+			}
+			recorded := false
+			if _, err := audit.Verify(e.Policy.Audit.Path, func(event audit.Event) {
+				if event.Kind != "policy" {
+					return
+				}
+				recorded = true
+				if event.Replayable || strings.Contains(string(event.Arguments), "tiny") || strings.Contains(string(event.Arguments), "opaque") || strings.Contains(string(event.Arguments), "sid=short") {
+					t.Error("audit arguments retained credentials or claimed exact replay")
+				}
+			}); err != nil || !recorded {
+				t.Fatal(err, recorded)
+			}
+		})
 	}
 }

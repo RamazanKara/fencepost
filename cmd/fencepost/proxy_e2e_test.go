@@ -238,3 +238,23 @@ func TestE2EWrapHTTP(t *testing.T) {
 		})
 	}
 }
+
+func TestE2EToolBudget(t *testing.T) {
+	dir := t.TempDir()
+	writePolicy(t, dir, map[string]any{"clean": map[string]any{"default": "deny", "tools": []any{map[string]any{"name": "*", "action": "allow", "budget": 1}}}})
+	cli(t, dir, 0, "policy", "check")
+	c := startProxy(t, dir, "clean")
+	for i, name := range []string{"echo", "echo", "other"} {
+		r := c.exchange(t, "tools/call", map[string]any{"name": name, "arguments": map[string]any{"text": "budget check"}})
+		if (r.Fields["error"] != nil) != (i == 1) {
+			t.Fatalf("call %d: %s", i, r.Raw)
+		}
+		if i == 1 && !strings.Contains(string(r.Raw), "Tool session budget") {
+			t.Fatal(string(r.Raw))
+		}
+	}
+	cli(t, dir, 0, "log", "verify")
+	if log := cli(t, dir, 0, "log", "query", "--decision", "deny"); !strings.Contains(log, `"rule":"tool_budget"`) {
+		t.Fatal(log)
+	}
+}

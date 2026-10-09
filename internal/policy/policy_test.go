@@ -138,3 +138,73 @@ func FuzzMatcher(f *testing.F) {
 		}
 	})
 }
+
+func TestToolBudgetValidation(t *testing.T) {
+	for _, value := range []string{"-1", "1.5", "0.5", "1e2", "true", "null", "'2'", "[]", "{}", "999999999999999999999999"} {
+		if _, err := Parse([]byte("version: 1\nservers: {s: {default: deny, tools: [{name: echo, action: allow, budget: "+value+"}]}}"), t.TempDir()); err == nil {
+			t.Fatalf("accepted invalid budget %s", value)
+		}
+	}
+	if _, err := Parse([]byte("version: 1\nservers: {s: {default: deny, tools: [{name: echo, action: allow, rate_limit: &fraction 1.5, budget: *fraction}]}}"), t.TempDir()); err == nil {
+		t.Fatal("accepted an aliased fractional budget")
+	}
+	if _, err := Parse([]byte("version: 1\nservers: {s: {default: deny, tools: [{<<: {name: echo, action: allow, budget: 1.5}}]}}"), t.TempDir()); err == nil {
+		t.Fatal("accepted a merged fractional budget")
+	}
+	p, err := Parse([]byte("version: 1\nservers: {s: {default: deny, tools: [{name: echo, action: allow, groups: [admin], budget: 9}, {name: '*', action: allow, rate_limit: 2, budget: 3}]}}"), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		id     Identity
+		budget int
+	}{{Identity{}, 3}, {Identity{Groups: []string{"admin"}}, 9}} {
+		got, _, _, budget := p.MatchIdentity("s", "echo", nil, tc.id)
+		if got != "allow" || budget != tc.budget {
+			t.Fatal(got, budget)
+		}
+	}
+}
+
+func FuzzPolicy(f *testing.F) {
+	for _, seed := range []string{
+		"version: 1\nservers: {s: {default: deny, tools: [{name: '*', action: allow, budget: 3, rate_limit: 5}]}}",
+		"version: 1\nservers: {s: {default: allow}}\nsession_budget: -1",
+		"version: 1\nservers: {s: {default: allow}}\nsession_budget: 0.5",
+		"version: 1\nservers: {s: {default: deny, tools: [{name: echo, action: allow, rate_limit: 0.5}]}}",
+		"version: 1\nservers: &s {s: *s}", "version: 1\nversion: 2", "null", "{}", "---\n---",
+	} {
+		f.Add(seed)
+	}
+	base := f.TempDir()
+	f.Fuzz(func(t *testing.T, raw string) {
+		if len(raw) > 16<<10 {
+			t.Skip()
+		}
+		p, err := Parse([]byte(raw), base)
+		if err != nil {
+			return
+		}
+		if p.Version != 1 || p.SessionBudget < 0 {
+			t.Fatal("invalid policy accepted")
+		}
+		for _, server := range p.Servers {
+			for _, tool := range server.Tools {
+				if tool.Budget < 0 || tool.RateLimit < 0 {
+					t.Fatal("negative tool limit accepted")
+				}
+			}
+		}
+	})
+}
+
+func TestFractionalCallLimits(t *testing.T) {
+	for _, raw := range []string{
+		"version: 1\nservers: {s: {default: allow}}\nsession_budget: 0.5",
+		"version: 1\nservers: {s: {default: deny, tools: [{name: '*', action: allow, rate_limit: 0.5}]}}",
+	} {
+		if _, err := Parse([]byte(raw), t.TempDir()); err == nil {
+			t.Error("fractional call limit silently became unlimited")
+		}
+	}
+}

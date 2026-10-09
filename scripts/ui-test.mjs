@@ -20,11 +20,12 @@ try {
   });
   const edge = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
   browser = await chromium.launch({headless: true, ...(process.platform === 'win32' && existsSync(edge) ? {executablePath: edge} : {})});
-  await mkdir('docs/screens', {recursive: true});
+  await mkdir(path.join(root, 'screens'), {recursive: true});
   let count = 0;
-  for (const width of [1280, 393]) {
+  const viewports = ['en-US', 'de-DE'].flatMap(locale => [1280, 360, 393].map(width => ({locale, width})));
+  for (const {locale, width} of viewports) {
     for (const theme of ['light', 'dark']) {
-      const context = await browser.newContext({viewport: {width, height: width === 1280 ? 900 : 852}, colorScheme: theme, timezoneId: 'UTC'});
+      const context = await browser.newContext({viewport: {width, height: width === 1280 ? 900 : 852}, colorScheme: theme, timezoneId: 'UTC', locale});
       const page = await context.newPage();
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
@@ -32,10 +33,13 @@ try {
       await page.goto(url);
       await page.waitForSelector('#server-list .name');
       assert.match(await page.title(), /Fencepost/);
+      const localeState = await page.evaluate(() => ({language: navigator.language, dateLocale: Intl.DateTimeFormat().resolvedOptions().locale}));
+      assert.equal(localeState.language, locale);
+      if (width === 1280 && theme === 'light') console.log(`Locale check: ${JSON.stringify(localeState)}`);
       assert.ok(!page.url().includes('token='));
       const capture = async name => {
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `Overflow: ${name}`);
-        await page.screenshot({path: `docs/screens/${name}-${width}-${theme}.png`, fullPage: true});
+        await page.screenshot({path: path.join(root, 'screens', `${name}-${width}-${locale}-${theme}.png`), fullPage: true});
         count++;
       };
       assert.match(await page.locator('#drift-list').innerText(), /browser_navigate/);
@@ -48,7 +52,7 @@ try {
       await page.getByRole('button', {name: 'Validate', exact: true}).click();
       await page.waitForFunction(() => document.querySelector('#policy-result').textContent.includes('Policy is valid'));
       await capture('policy');
-      if (width === 393 && theme === 'light') {
+      if (width !== 1280 && theme === 'light') {
         const original = await page.locator('#policy-text').inputValue();
         await page.locator('#policy-text').fill(original.replaceAll('action: allow', 'action: deny'));
         await page.getByRole('button', {name: 'Test against recent calls', exact: true}).click();
@@ -81,7 +85,7 @@ try {
       await context.close();
     }
   }
-  console.log(`UI checks passed; ${count} screenshots at 1280 and 393 CSS pixels, light and dark.`);
+  console.log(`UI checks passed; ${count} screenshots at 1280/360/393 CSS pixels, EN/DE browser locales, light and dark. Console labels are English.`);
 } finally {
   if (browser) await browser.close();
   child.kill();

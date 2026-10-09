@@ -18,7 +18,7 @@ import (
 type Policy struct {
 	Version       int               `yaml:"version"`
 	Servers       map[string]Server `yaml:"servers"`
-	SessionBudget int               `yaml:"session_budget"`
+	SessionBudget CallLimit         `yaml:"session_budget"`
 	Output        Output            `yaml:"output"`
 	Approval      Approval          `yaml:"approval"`
 	Audit         Audit             `yaml:"audit"`
@@ -33,10 +33,21 @@ type Tool struct {
 	Name      string     `yaml:"name"`
 	Action    string     `yaml:"action"`
 	Arguments []Argument `yaml:"arguments,omitempty"`
-	RateLimit int        `yaml:"rate_limit,omitempty"`
+	RateLimit CallLimit  `yaml:"rate_limit,omitempty"`
+	Budget    CallLimit  `yaml:"budget,omitempty"`
 	Users     []string   `yaml:"users,omitempty"`
 	Groups    []string   `yaml:"groups,omitempty"`
 	Clients   []string   `yaml:"clients,omitempty"`
+}
+
+// YAML otherwise truncates fractional numbers when decoding into an int.
+type CallLimit int
+
+func (b *CallLimit) UnmarshalYAML(n *yaml.Node) error {
+	if n.Tag != "!!int" {
+		return fmt.Errorf("line %d: call limit must be an integer", n.Line)
+	}
+	return n.Decode((*int)(b))
 }
 
 type Identity struct {
@@ -203,6 +214,9 @@ func Parse(data []byte, base string) (*Policy, error) {
 			if t.RateLimit < 0 {
 				return nil, at("rate_limit must be nonnegative", "servers", name, "tools", strconv.Itoa(i), "rate_limit")
 			}
+			if t.Budget < 0 {
+				return nil, at("budget must be a nonnegative integer", "servers", name, "tools", strconv.Itoa(i), "budget")
+			}
 			for j := range t.Arguments {
 				a := &t.Arguments[j]
 				a.parts, err = parsePath(a.Path)
@@ -320,13 +334,14 @@ func absolute(base, name string) string {
 func action(s string) bool { return s == "allow" || s == "deny" || s == "ask" }
 
 func (p *Policy) Match(server, tool string, args map[string]any) (string, string, int) {
-	return p.MatchIdentity(server, tool, args, Identity{})
+	action, rule, rate, _ := p.MatchIdentity(server, tool, args, Identity{})
+	return action, rule, rate
 }
 
-func (p *Policy) MatchIdentity(server, tool string, args map[string]any, identity Identity) (string, string, int) {
+func (p *Policy) MatchIdentity(server, tool string, args map[string]any, identity Identity) (string, string, int, int) {
 	s, ok := p.Servers[server]
 	if !ok {
-		return "deny", "server", 0
+		return "deny", "server", 0, 0
 	}
 	for i, t := range s.Tools {
 		if !identityMatches(t.Users, []string{identity.User}) || !identityMatches(t.Groups, identity.Groups) || !identityMatches(t.Clients, []string{identity.Client}) {
@@ -338,12 +353,12 @@ func (p *Policy) MatchIdentity(server, tool string, args map[string]any, identit
 		rule := fmt.Sprintf("tool:%d", i+1)
 		for j, a := range t.Arguments {
 			if !a.match(args) {
-				return "deny", fmt.Sprintf("%s/argument:%d", rule, j+1), 0
+				return "deny", fmt.Sprintf("%s/argument:%d", rule, j+1), 0, 0
 			}
 		}
-		return t.Action, rule, t.RateLimit
+		return t.Action, rule, int(t.RateLimit), int(t.Budget)
 	}
-	return s.Default, "default", 0
+	return s.Default, "default", 0, 0
 }
 
 func identityMatches(required, actual []string) bool {

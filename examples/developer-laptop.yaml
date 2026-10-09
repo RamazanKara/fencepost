@@ -7,11 +7,13 @@ servers:
       - name: read_*
         action: allow
         rate_limit: 120
+        budget: 150
         arguments:
           - path: $.path
             path_prefix: [../workspace]
       - name: write_file
         action: ask
+        budget: 5
         arguments:
           - path: $.path
             path_prefix: [../workspace]
@@ -23,6 +25,7 @@ servers:
       - name: fetch
         action: allow
         rate_limit: 20
+        budget: 40
         arguments:
           - path: $.url
             host: [docs.python.org, go.dev]

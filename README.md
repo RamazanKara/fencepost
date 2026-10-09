@@ -4,7 +4,7 @@ Fencepost audits MCP servers and enforces tool-call policy between an AI agent a
 
 ## 60-second quickstart
 
-Fencepost **0.3.0**. From this checkout with Go 1.27.2, run the first command once to build the CLI; compilation and dependency downloads are setup time and may exceed a minute. The following three CLI commands are the 60-second walkthrough: create a starter policy, validate it, and explain a denied call. No MCP server or credential is needed.
+Fencepost **0.4.0**. From this checkout with Go 1.27.2, run the first command once to build the CLI; compilation and dependency downloads are setup time and may exceed a minute. The following three CLI commands are the 60-second walkthrough: create a starter policy, validate it, and explain a denied call. No MCP server or credential is needed.
 
 <!-- quickstart -->
 ```sh
@@ -48,6 +48,8 @@ Vetting reports package metadata, tool findings, install hooks, age, name simila
 
 Review the exact server names and allowed arguments in the [starter packs](docs/packs.md). The [local console](docs/console.md) uses a private loopback URL, contains all assets in the binary, and verifies audit history before showing it. [Signed rule updates](docs/rule-updates.md) are opt-in; normal commands never download rules.
 
+0.4.0 adds per-tool session `budget` limits and stronger credential redaction. See [budget accounting and output rules](docs/policy.md). Config discovery, policy replay, SIEM exports, and the docs builder remain available from earlier releases.
+
 `make docs` generates `site/` from this README and `docs/`. See the [local release and Pages procedure](docs/RELEASING.md).
 
 ## Team gateway
@@ -70,11 +72,13 @@ servers:
       - name: read_file
         action: allow
         rate_limit: 60
+        budget: 80
         arguments:
           - path: $.path
             path_prefix: [./workspace]
       - name: write_file
         action: ask
+        budget: 5
         arguments:
           - path: $.path
             path_prefix: [./workspace]
@@ -179,6 +183,8 @@ Run bounded fuzzing locally (CI runs seeds only) and benchmark the call path:
 ```sh
 go test ./internal/mcp -run '^$' -fuzz FuzzFraming -fuzztime=60s
 go test ./internal/policy -run '^$' -fuzz FuzzMatcher -fuzztime=60s
+go test ./internal/policy -run '^$' -fuzz FuzzPolicy -fuzztime=60s
+go test ./internal/scan -run '^$' -fuzz FuzzRedactSecrets -fuzztime=60s
 go test ./internal/proxy -run '^$' -bench BenchmarkSmallCall -benchmem
 ```
 
@@ -186,7 +192,7 @@ Property tests exercise policy ordering/constraints and audit-chain tampering. T
 
 Measured latency, soak results, and scope are recorded in [docs/PERF.md](docs/PERF.md).
 
-The docs builder uses Goldmark for CommonMark/GFM rendering; it is not linked into the firewall binary. `npm ci && make ui-test` uses Playwright (Chromium, or installed Edge on Windows) and writes every console view to `docs/screens/`. No frontend dependencies or CDN assets are shipped in the console.
+The docs builder uses Goldmark for CommonMark/GFM rendering; it is not linked into the firewall binary. `npm ci && make ui-test` uses Playwright (Chromium, or installed Edge on Windows) and writes every console view to the ignored `.ui-fixture/screens/` directory at desktop and 360/393 CSS pixels with EN/DE browser locales. Console labels remain English. No frontend dependencies or CDN assets are shipped in the console.
 
 Regenerate the rule reference with `go generate ./internal/scan`. Tests check that it matches the rule registry. Verbatim descriptions captured from official reference servers, with source hashes and upstream licensing notices, are in `testdata/reference/`.
 

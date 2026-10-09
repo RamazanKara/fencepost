@@ -14,11 +14,13 @@ servers:
       - name: read_*
         action: allow
         rate_limit: 60
+        budget: 80
         arguments:
           - path: $.path
             path_prefix: [./workspace]
       - name: write_file
         action: ask
+        budget: 5
         arguments:
           - path: $.path
             path_prefix: [./workspace]
@@ -65,10 +67,15 @@ Invalid policy diagnostics include the filename, line, and failed validation wit
 | `tools[].name` | Required case-sensitive Go path glob: `*`, `?`, `[abc]`, `[a-z]`. `*` does not cross `/`. Put specific rules before broad ones. |
 | `tools[].action` | Required `allow`, `deny`, or `ask`. Argument constraints apply before asking. |
 | `tools[].rate_limit` | Nonnegative calls per rolling minute for that actual tool name; `0` or omitted means unlimited. |
+| `tools[].budget` | Nonnegative authorized calls per actual tool name in one proxied MCP session; `0` or omitted means unlimited. Wildcard matches have separate counters for each name. |
 | `tools[].arguments` | Optional list of argument constraints. Every rule must pass. |
 | `session_budget` | Nonnegative total allowed calls across all tools in one proxied MCP session; `0` or omitted means unlimited. Denied calls do not consume it. Upstream failures after authorization do. |
 
 A stdio process is one session. A legacy HTTP session starts on successful initialization and ends with DELETE or proxy shutdown. Unknown session IDs are rejected. Modern stateless HTTP requests without session IDs share one budget for the listener's lifetime. Each wrapped server has its own MCP session; Fencepost cannot identify a common agent conversation across independent server processes. Approval grants and counters are in memory and reset with a new session. There is no automatic upstream restart.
+
+Call limits must be YAML integers: fractional values (including `0.5`), strings and booleans are rejected, including through aliases/merges. Per-tool budgets and the overall `session_budget` both apply. Argument, pin, cancellation, approval, rate, and budget denials do not consume a tool budget. Once authorized, a call consumes budget even if upstream execution fails. Approval grants cannot bypass either budget. Budget denial records use `tool_budget`; the overall session limit uses `budget`.
+
+A tool starts tracking on its first authorized call with a positive `budget`. Usage stays with its actual name across rule changes and policy reloads, including calls while its limit is temporarily disabled. Calls before tracking began cannot be reconstructed. A new transport session resets usage. Up to 1024 budgeted tool names are retained per session; further new budgeted names fail closed without evicting existing counters. Unbudgeted names need no new counter. Policy replay and `explain` show static policy decisions, not simulated consumption; replay still does not predict rates, budgets, pins or approvals.
 
 ## Arguments
 
@@ -92,9 +99,11 @@ Output rules apply to tool results, including nested structured content and tool
 
 | Field | Default and behavior |
 | --- | --- |
-| `output.redact_secrets` | `true`. Uses the FP005 credential patterns, sensitive-key heuristic, and entropy detector. Replacements identify the detector, for example `[redacted:github-token]`, `[redacted:slack-token]`, `[redacted:api-key]`, or `[redacted:secret]`. Set `false` to disable result redaction; audit entries still omit argument/result bodies and sanitize identifiers. |
+| `output.redact_secrets` | `true`. Uses the FP005 credential patterns, sensitive-key heuristic, and entropy detector. Replacements identify the detector, for example `[redacted:github-token]`, `[redacted:slack-token]`, `[redacted:api-key]`, or `[redacted:secret]`. Short or mixed string values under sensitive keys (including cookies) are replaced in full, even when they resemble config references. Text redaction also covers Bearer/Basic authorization headers, Cookie/Set-Cookie lines and URL userinfo. Unmatched private-key fragments fail closed to a whole-string replacement. Set `false` to disable result redaction; audit entries still omit argument/result bodies and sanitize identifiers. |
 | `output.max_bytes` | `1048576`. Allowed range 512–16777216 bytes of encoded result JSON. Oversized results are replaced with a short `isError: true` text result; JSON and binary blocks are never cut in the middle. |
 | `output.injection` | `warn`. FP001's detector adds a visible warning text block before the existing content. `block` returns a JSON-RPC error instead. Suspicious JSON-RPC errors are blocked because they have no content-block surface. |
+
+For example, `{"password":"pw"}` becomes `{"password":"[redacted:secret]"}`, `Authorization: Bearer opaque` becomes `Authorization: [redacted:authorization]`, and `https://user:pw@example.com/path` becomes `https://[redacted:userinfo]@example.com/path`. Header-line redaction may remove harmless cookie attributes or other text on that line. Query parameters without a recognized token are not generally decoded or redacted.
 
 The detectors are heuristics. A warning does not make malicious content safe, and a redaction detector cannot recognize every secret or encoded payload. Each MCP frame/SSE event is bounded at 16 MiB. Streams are processed event by event; the complete stream is never accumulated.
 

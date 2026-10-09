@@ -2,7 +2,7 @@ services:
   gateway:
     build:
       context: ../..
-    image: fencepost:0.3.0
+    image: fencepost:0.4.0
     command: [gateway, --config, /config/gateway.yaml]
     user: "65532:65532"
     read_only: true

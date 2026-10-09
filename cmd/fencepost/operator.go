@@ -76,7 +76,7 @@ func runOperatorCommands(args []string, out, errOut io.Writer) int {
 				return fail(fmt.Errorf("%s: arguments must be a JSON object", flags.Arg(1)))
 			}
 		}
-		action, rule, rate := p.Match(call.Server, call.Name, arguments)
+		action, rule, rate, budget := p.MatchIdentity(call.Server, call.Name, arguments, policy.Identity{})
 		reason := "first matching tool rule; all argument constraints passed"
 		switch {
 		case rule == "server":
@@ -90,7 +90,7 @@ func runOperatorCommands(args []string, out, errOut io.Writer) int {
 		if action == "ask" {
 			fmt.Fprintln(out, "Approval is required; this command does not request it.")
 		}
-		fmt.Fprintf(out, "Policy evaluation only: rate_limit=%d/minute, session_budget=%d (0 means unlimited). Live counters, approvals, and pins are checked by the proxy.\n", rate, p.SessionBudget)
+		fmt.Fprintf(out, "Policy evaluation only: rate_limit=%d/minute, budget=%d/tool, session_budget=%d (0 means unlimited). Live counters, approvals, and pins are checked by the proxy.\n", rate, budget, p.SessionBudget)
 		if action != "allow" {
 			return 1
 		}

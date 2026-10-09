@@ -87,7 +87,7 @@ func PolicyDiffEvents(events []Event, p *policy.Policy, out io.Writer) (int, err
 				return count, fmt.Errorf("invalid recorded arguments")
 			}
 		}
-		action, rule, _ := p.MatchIdentity(e.Server, e.Tool, args, policy.Identity{User: e.User, Groups: e.Groups, Client: e.Client})
+		action, rule, _, _ := p.MatchIdentity(e.Server, e.Tool, args, policy.Identity{User: e.User, Groups: e.Groups, Client: e.Client})
 		note := ""
 		if (len(e.Arguments) > 0 && !e.Replayable) || (len(e.Arguments) == 0 && strings.Contains(rule, "/argument:")) {
 			action, note = "unknown", "arguments were not recorded intact; constraints cannot be replayed"

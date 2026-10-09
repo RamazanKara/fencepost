@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 - 2026-10-09
+
+- Add per-tool session call budgets alongside rolling rate limits, with atomic enforcement, bounded counter storage, audit denials, and usage retained across policy reloads once tracking begins.
+- Reject fractional YAML call limits instead of silently truncating them, including fractions below one that previously disabled rate/session caps.
+- Redact short and mixed sensitive-key values, HTTP authorization/cookie headers, URL userinfo, and private-key fragments alongside recognized tokens, including approval and recorded-argument surfaces.
+- Cover policy parsing and redaction with fuzz targets and budget enforcement with concurrent and end-to-end regression tests.
+- Extend local console checks to 360/393 CSS pixels and English/German browser locales; keep bulk screenshots in ignored fixture output. The console remains English-only.
+
 ## 0.3.0 - 2026-10-09
 
 - Vet npm, PyPI, OCI and MCP registry packages or remote endpoints before installation, with explicit isolation limits, scan findings, package risk signals and pinned maintainer comparisons.

@@ -40,6 +40,7 @@ type Engine struct {
 	pinned                          bool
 	generation                      int
 	used                            int
+	toolUsed                        map[string]int
 	rates                           map[string][]time.Time
 	rateSweep                       time.Time
 	always                          map[string]bool
@@ -47,7 +48,7 @@ type Engine struct {
 }
 
 func New(p *policy.Policy, log *audit.Log, server, lockPath string) (*Engine, error) {
-	e := &Engine{Policy: p, Log: log, ServerName: server, SessionID: approval.Token()[:16], lockPath: lockPath, pending: map[string]*Request{}, trusted: map[string]bool{}, rates: map[string][]time.Time{}, always: map[string]bool{}}
+	e := &Engine{Policy: p, Log: log, ServerName: server, SessionID: approval.Token()[:16], lockPath: lockPath, pending: map[string]*Request{}, trusted: map[string]bool{}, toolUsed: map[string]int{}, rates: map[string][]time.Time{}, always: map[string]bool{}}
 	if _, err := pin.Read(lockPath); err == nil {
 		e.pinned = true
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -179,7 +180,7 @@ func (e *Engine) Check(r *Request) (*mcp.Message, error) {
 		return deny("Tool calls require a request ID.", "notification")
 	}
 	p := e.currentPolicy()
-	action, rule, rate := p.MatchIdentity(e.ServerName, r.tool, r.args, e.Identity)
+	action, rule, rate, budget := p.MatchIdentity(e.ServerName, r.tool, r.args, e.Identity)
 	if e.Log != nil {
 		event := audit.Event{Session: e.SessionID, Kind: "policy", Method: r.method, Server: e.ServerName, Tool: r.tool, Decision: action, Rule: rule, User: e.Identity.User, Groups: e.Identity.Groups, Client: e.Identity.Client}
 		if p.Audit.RecordArguments {
@@ -236,18 +237,24 @@ func (e *Engine) Check(r *Request) (*mcp.Message, error) {
 		if e.currentPolicy() != p {
 			return deny("Policy changed while awaiting approval; retry the call.", "policy_changed")
 		}
-		if action, rule, _ := p.MatchIdentity(e.ServerName, r.tool, r.args, e.Identity); action == "deny" {
+		if action, rule, _, _ := p.MatchIdentity(e.ServerName, r.tool, r.args, e.Identity); action == "deny" {
 			return deny("Tool arguments changed while awaiting approval.", rule)
 		}
 	}
 	e.mu.Lock()
 	reason, hit := "", ""
+	toolUsed, tracked := e.toolUsed[r.tool]
 	if r.Context.Err() != nil {
 		reason, hit = "Tool call was cancelled.", "cancelled"
 	} else if e.pinned && !e.trusted[r.tool] {
 		reason, hit = "Tool definition changed; list tools again after reviewing the pin.", "pin"
-	} else if p.SessionBudget > 0 && e.used >= p.SessionBudget {
+	} else if p.SessionBudget > 0 && e.used >= int(p.SessionBudget) {
 		reason, hit = "Session tool-call budget exhausted.", "budget"
+	} else if budget > 0 && toolUsed >= budget {
+		reason, hit = "Tool session budget exhausted.", "tool_budget"
+	} else if budget > 0 && !tracked && len(e.toolUsed) >= 1024 {
+		// Wildcards must not retain an unbounded set of client-supplied names.
+		reason, hit = "Session budget tracking capacity exhausted.", "tool_budget"
 	}
 	now := time.Now()
 	if reason == "" && rate > 0 {
@@ -274,6 +281,9 @@ func (e *Engine) Check(r *Request) (*mcp.Message, error) {
 	}
 	if reason == "" {
 		e.used++
+		if budget > 0 || tracked {
+			e.toolUsed[r.tool] = toolUsed + 1
+		}
 		if approvedAlways {
 			e.always[r.tool] = true
 		}

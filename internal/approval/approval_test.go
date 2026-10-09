@@ -37,7 +37,7 @@ func TestApprovalPage(t *testing.T) {
 		t.Run(decision, func(t *testing.T) {
 			result := make(chan string, 1)
 			go func() {
-				result <- Ask(context.Background(), config, Request{Server: "<script>alert(1)</script>", Tool: "read", Arguments: json.RawMessage(`{"token":"ghp_abcdefghijklmnopqrstuvwxyz123456"}`)})
+				result <- Ask(context.Background(), config, Request{Server: "<script>alert(1)</script>", Tool: "read", Arguments: json.RawMessage(`{"token":"ghp_abcdefghijklmnopqrstuvwxyz123456","password":"tiny","text":"Authorization: Bearer opaque"}`)})
 			}()
 			var pending []Request
 			deadline := time.Now().Add(time.Second)
@@ -64,7 +64,7 @@ func TestApprovalPage(t *testing.T) {
 			}
 			page, _ := io.ReadAll(r.Body)
 			_ = r.Body.Close()
-			if strings.Contains(string(page), "<script>") || strings.Contains(string(page), "ghp_") || !strings.Contains(string(page), "Approve once") {
+			if strings.Contains(string(page), "<script>") || strings.Contains(string(page), "ghp_") || strings.Contains(string(page), "tiny") || strings.Contains(string(page), "opaque") || !strings.Contains(string(page), "Approve once") {
 				t.Fatal(string(page))
 			}
 			response, err := http.PostForm(s.URL+"/decision?token="+token, url.Values{"id": {pending[0].ID}, "decision": {decision}})

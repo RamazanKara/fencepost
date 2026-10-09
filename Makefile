@@ -18,7 +18,7 @@ release:
 	go run scripts/build.go release
 
 image:
-	docker build -t fencepost:0.3.0 .
+	docker build -t fencepost:0.4.0 .
 
 docs:
 	go run scripts/docs.go

@@ -58,3 +58,23 @@ The same 10,000-call benchmark was rerun three times on 2026-10-09 without `-rac
 | Policy + output + audit | 881.096 / 674.551 / 1071.831 µs | 13.5077 / 8.7951 / 14.7667 ms | 302–303 per call |
 
 The earlier sub-1-ms p99 was **not reproduced** in this run. Host activity was substantial, so these measurements do not isolate a code regression, but the current result does not meet that earlier latency target. An idle-runner measurement remains necessary before claiming that target for 0.1.0.
+
+
+## 0.4.0 local validation (2026-10-09)
+
+On the same Windows 11 runner, `make lint test e2e build` passed with Go 1.27.2, GCC 16.2.0, `CGO_ENABLED=1`, `GOFLAGS="-buildvcs=false -p=1"`, and `GOMAXPROCS=4`. Lint reported zero issues; unit and CLI e2e tests used the race detector. All six distribution targets compiled. Helm's template test was skipped because Helm was unavailable. Source directories were unwritable, so checks ran against the patched writable copy; no commit or publication was made.
+
+Each fuzz target passed a 60-second run with two workers and no failing corpus entries:
+
+| Target | Executions |
+| --- | ---: |
+| `FuzzFraming` | 417,483 |
+| `FuzzMatcher` | 77,899 |
+| `FuzzPolicy` | 48,137 |
+| `FuzzRedactSecrets` | 105,434 |
+
+The ten-minute race-enabled soak **failed an unchanged audit-count assertion**. It completed 199,427 calls and verified 598,281 records without a chain error. The test still expects two records per call; the existing engine also emits a policy event, making three. This unrelated assertion was left unchanged. Retained heap at minutes 2 and 10 was 6,363,552 and 6,788,144 bytes; the largest sampled heap was 7,629,096 bytes. Steady-load goroutines were 38–39. RSS, sampled every five seconds across traffic and verification, peaked at 277,213,184 bytes and ended at 268,271,616 bytes. The test took 762.14 seconds. The final goroutine-convergence assertion was not reached after the audit-count failure. This workload uses rate limits, not positive per-tool budgets; it ran before the final fractional-limit parser correction. Other checks ran concurrently, so these are not capacity measurements.
+
+`make ui-test` passed in installed Edge with 56 screenshots covering 1280/360/393 CSS pixels, light/dark themes and EN/DE browser language settings. Every screenshot was reviewed for debug UI, text fit, overlaps/clipping, consistent style and placeholder data in the shipped UI; none were found. Synthetic records remain in the fixture harness. The console remains English-only. `navigator.language` matched each requested locale, but this Edge reported host `de-DE` for `Intl.DateTimeFormat` in both contexts, so distinct English date formatting was not verified. `make docs` built all 16 pages.
+
+`make release` produced all six 0.4.0 binaries and `SHA256SUMS`, then failed because Docker was unavailable. All six SHA256 checks matched. The native Windows amd64 binary reported 0.4.0 with the source commit marked dirty and validated the developer-laptop example. Docker and execution on the other platforms remain unverified. There is no Android/Gradle project in this repository, so no arm64 debug APK was rebuilt.

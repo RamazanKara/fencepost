@@ -41,7 +41,7 @@ func TestDirectoryMergeAndIdentity(t *testing.T) {
 		{Identity{User: "alice", Groups: []string{"engineering"}, Client: "spoof"}, "deny"},
 		{Identity{}, "deny"},
 	} {
-		action, _, _ := p.MatchIdentity("s", "echo", nil, test.id)
+		action, _, _, _ := p.MatchIdentity("s", "echo", nil, test.id)
 		if action != test.want {
 			t.Errorf("%+v: %s", test.id, action)
 		}

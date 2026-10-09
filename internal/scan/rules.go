@@ -443,7 +443,7 @@ func pinnedPackage(pkg, launcher string) bool {
 	return i > 0 && exactVersion.MatchString(pkg[i+1:])
 }
 
-var secretKey = regexp.MustCompile(`(?i)(token|secret|password|api[-_]?key|authorization|credential|private[-_]?key)`)
+var secretKey = regexp.MustCompile(`(?i)(token|secret|password|api[-_]?key|authorization|credential|private[-_]?key|cookie)`)
 var envReference = regexp.MustCompile(`\$\{[^}]+\}`)
 
 func secret(key, value string) bool {

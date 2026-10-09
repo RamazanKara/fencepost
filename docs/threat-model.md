@@ -25,6 +25,8 @@ The baseline covers advertised tool definitions. A server can change implementat
 
 The standalone HTTP proxy and local approval service are for local use. Other processes running as the same user can usually read config, approval descriptors, and audit files or invoke servers directly. Windows uses the containing directory's ACLs; Unix uses restrictive file modes for newly created sensitive files. Local administrators are outside the boundary. Gateway mode adds issuer-validated user/group/client identity and isolated transport state; it does not isolate upstream processes at the OS level.
 
+Per-tool budgets count authorized calls, not money, tokens or upstream resource use. Wildcards give each actual tool name its own quota; use exact names and an overall session budget when a combined ceiling is required. Counters begin when a positive tool budget first authorizes a call and remain across reloads thereafter.
+
 Budgets and approvals last for one proxied MCP session. Starting another process or a new legacy HTTP session starts new counters. Modern stateless HTTP shares the listener's lifetime budget. Independent wrapped servers do not share an agent-conversation identity. No billing-grade or organization-wide accounting is claimed.
 
 Audit hashing detects accidental edits and tampering by actors who cannot also replace the checkpoint. An attacker controlling both files can recompute the chain. Removing all evidence, rolling both files back together, or disk loss requires an external anchor/collector to detect. Writes use the OS cache and sync on orderly shutdown; power loss may leave an incomplete tail that fails verification. OTLP export is optional and best effort, with a bounded queue; it is not the authoritative audit record.

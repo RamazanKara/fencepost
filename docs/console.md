@@ -22,7 +22,7 @@ Save validates before atomic replacement and rejects a changed-on-disk file. Rel
 
 Run `npm ci` then `make ui-test`. This requires Node.js 22+, Go and Playwright Chromium (`npx playwright install chromium`), or installed Microsoft Edge on Windows. The fixture builds the binary, creates synthetic configs/pins/audit records and drives real authenticated handlers without contacting the displayed servers.
 
-The script captures all views at 1280×900 and 393×852 CSS pixels in both themes, plus denies, redactions, empty results, invalid policy and replay states. It checks navigation, filtering, themes, validation, replay, saves, page errors and horizontal overflow. All PNGs are in `docs/screens/`.
+The script captures all views at 1280×900, 360×852 and 393×852 CSS pixels in both themes and with `en-US`/`de-DE` browser locales (the console text is English-only), plus denies, redactions, empty results, invalid policy and replay states. It checks navigation, filtering, themes, validation, replay, saves, page errors and horizontal overflow. Generated PNGs are in ignored `.ui-fixture/screens/`; `docs/screens/` retains the small curated documentation set. Review for debug UI, clipping/overlap, text fit, consistent styling and fixture data leaking into shipped UI. Fixture records exist only in the test harness.
 
 ![Servers, light desktop](screens/servers-1280-light.png)
 
