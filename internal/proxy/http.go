@@ -122,7 +122,11 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		body = request.Message.Raw
 	}
-	upstream, err := http.NewRequestWithContext(r.Context(), r.Method, h.upstream, bytes.NewReader(body))
+	upstreamContext := r.Context()
+	if request != nil && request.method != "" && message.Fields["id"] != nil {
+		upstreamContext = request.Context
+	}
+	upstream, err := http.NewRequestWithContext(upstreamContext, r.Method, h.upstream, bytes.NewReader(body))
 	if err != nil {
 		http.Error(w, "Invalid upstream", http.StatusBadGateway)
 		return
@@ -190,13 +194,21 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	contentType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	switch contentType {
 	case "text/event-stream":
+		defer e.Forget(message)
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(response.StatusCode)
-		err = relaySSE(response.Body, w, func(m mcp.Message) (mcp.Message, error) { return e.Server(m) })
+		responded := false
+		err = relaySSE(response.Body, w, func(m mcp.Message) (mcp.Message, error) {
+			result, err := e.Server(m)
+			if err == nil && m.String("method") == "" && m.ID() == message.ID() {
+				responded = true
+			}
+			return result, err
+		})
 		e.mu.Lock()
 		pending := e.pending[message.ID()] != nil
 		e.mu.Unlock()
-		if (err != nil || pending) && r.Context().Err() == nil && message.Fields["id"] != nil {
+		if !responded && (err != nil || pending) && r.Context().Err() == nil && message.Fields["id"] != nil {
 			e.Forget(message)
 			failure := Error(message, -32002, "Upstream stream disconnected or was invalid.")
 			_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", failure.Raw)

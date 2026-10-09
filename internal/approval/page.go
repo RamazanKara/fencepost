@@ -124,9 +124,12 @@ func scrub(v any, key string) any {
 		s, _ := scan.RedactSecrets(key, x)
 		return s
 	case map[string]any:
+		result := make(map[string]any, len(x))
 		for k, child := range x {
-			x[k] = scrub(child, k)
+			cleanKey, _ := scan.RedactSecrets("", k)
+			result[cleanKey] = scrub(child, k)
 		}
+		return result
 	case []any:
 		for i, child := range x {
 			x[i] = scrub(child, key)

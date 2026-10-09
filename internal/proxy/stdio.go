@@ -62,6 +62,13 @@ func Stdio(ctx context.Context, e *Engine, s clientconfig.Server, in io.ReadClos
 func Relay(ctx context.Context, e *Engine, in io.ReadCloser, out io.Writer, upIn io.WriteCloser, upOut io.ReadCloser) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	closePipes := sync.OnceFunc(func() {
+		_ = in.Close()
+		_ = upIn.Close()
+		_ = upOut.Close()
+	})
+	stop := context.AfterFunc(ctx, closePipes)
+	defer stop()
 	frames := make(chan frame, 16)
 	var readers, workers sync.WaitGroup
 	for _, source := range []struct {
@@ -97,9 +104,7 @@ func Relay(ctx context.Context, e *Engine, in io.ReadCloser, out io.Writer, upIn
 	}
 	defer func() {
 		cancel()
-		_ = in.Close()
-		_ = upIn.Close()
-		_ = upOut.Close()
+		closePipes()
 		readers.Wait()
 		workers.Wait()
 	}()

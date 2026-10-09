@@ -9,12 +9,46 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/RamazanKara/fencepost/internal/policy"
 )
+
+func TestAuditExportAlias(t *testing.T) {
+	for _, suffix := range []string{"", ".head", ".writing"} {
+		t.Run("audit"+suffix, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "audit.jsonl")
+			l, err := Open(path, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := l.Close(); err != nil {
+				t.Fatal(err)
+			}
+			alias := strings.ToUpper(path + suffix)
+			if runtime.GOOS != "windows" {
+				alias = path + ".alias"
+				if err := os.Link(path+suffix, alias); err != nil {
+					t.Skipf("hard links unavailable: %v", err)
+				}
+			}
+			if _, err := os.Stat(alias); err != nil {
+				t.Fatal(err)
+			}
+			l, err = OpenConfigured(policy.Audit{Path: path, ExportFile: alias, MaxBytes: 1024, Backups: 1}, io.Discard)
+			if err == nil {
+				_ = l.Close()
+				t.Fatal("export accepted an alias of the authoritative audit log")
+			}
+			if n, err := Verify(path, nil); err != nil || n != 0 {
+				t.Fatal(n, err)
+			}
+		})
+	}
+}
 
 func TestPolicyDiffAndQuery(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")

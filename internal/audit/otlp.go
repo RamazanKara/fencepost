@@ -25,6 +25,7 @@ func newExporter(endpoint string) *exporter {
 	go func() {
 		defer close(e.done)
 		client := &http.Client{Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		defer client.CloseIdleConnections()
 		for event := range e.queue {
 			var trace [16]byte
 			var span [8]byte
@@ -39,9 +40,15 @@ func newExporter(endpoint string) *exporter {
 			data, _ := json.Marshal(payload)
 			response, err := client.Post(endpoint, "application/json", bytes.NewReader(data))
 			if err == nil {
-				_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+				body, readErr := io.ReadAll(io.LimitReader(response.Body, 4097))
 				_ = response.Body.Close()
-				if response.StatusCode != http.StatusOK {
+				var result struct {
+					PartialSuccess struct {
+						Rejected json.Number `json:"rejectedSpans"`
+						Message  string      `json:"errorMessage"`
+					} `json:"partialSuccess"`
+				}
+				if response.StatusCode != http.StatusOK || readErr != nil || len(body) > 4096 || (len(body) > 0 && json.Unmarshal(body, &result) != nil) || (result.PartialSuccess.Rejected != "" && result.PartialSuccess.Rejected != "0") || result.PartialSuccess.Message != "" {
 					err = errors.New("OTLP collector rejected span")
 				}
 			}

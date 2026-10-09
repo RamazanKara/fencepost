@@ -171,7 +171,10 @@ func (l *Log) Write(e Event) error {
 	for i := range e.Groups {
 		e.Groups[i], _ = scan.RedactSecrets("", e.Groups[i])
 	}
-	data, _ := json.Marshal(entry{h.Sequence + 1, h.Hash, e})
+	data, err := json.Marshal(entry{h.Sequence + 1, h.Hash, e})
+	if err != nil {
+		return err
+	}
 	sum := sha256.Sum256(data)
 	hash := hex.EncodeToString(sum[:])
 	line, _ := json.Marshal(Record{data, hash})

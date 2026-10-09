@@ -132,6 +132,9 @@ func Parse(data []byte, source, project string) ([]Server, error) {
 	groups := []*yaml.Node{child(root, "mcpServers"), child(root, "servers"), child(child(root, "mcp"), "servers"), child(root, "mcp.servers")}
 	projects := child(root, "projects")
 	if projects != nil {
+		if projects.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("%s:%d: expected project map", source, projects.Line)
+		}
 		for i := 0; i < len(projects.Content); i += 2 {
 			if filepath.Clean(projects.Content[i].Value) == filepath.Clean(project) {
 				groups = append(groups, child(projects.Content[i+1], "mcpServers"))

@@ -19,9 +19,11 @@ function badge(text, kind) { return element('span', text, `badge ${kind || ''}`)
 function theme(value) {
   document.documentElement.dataset.theme = value;
   $('theme').textContent = value === 'dark' ? 'Light theme' : 'Dark theme';
-  localStorage.setItem('fencepost-theme', value);
+  try { localStorage.setItem('fencepost-theme', value); } catch { /* Theme persistence is optional. */ }
 }
-theme(localStorage.getItem('fencepost-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+let initialTheme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+try { initialTheme = localStorage.getItem('fencepost-theme') || initialTheme; } catch { /* Use the system theme when storage is unavailable. */ }
+theme(initialTheme);
 $('theme').addEventListener('click', () => theme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
 document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', async () => {
   document.querySelectorAll('[data-view]').forEach(item => item.removeAttribute('aria-current'));

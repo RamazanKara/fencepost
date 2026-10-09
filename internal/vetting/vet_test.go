@@ -11,8 +11,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RamazanKara/fencepost/internal/clientconfig"
 	"github.com/RamazanKara/fencepost/internal/pin"
 )
+
+func TestLaunchReferenceCustomRegistry(t *testing.T) {
+	for _, tc := range []struct {
+		command string
+		args    []string
+		want    string
+	}{
+		{"npx", []string{"--package", "fixture@1.2.3", "run"}, "npm:fixture@1.2.3"},
+		{"npx", []string{"--package", "fixture@1.2.3", "run", "--registry=https://app.example"}, "npm:fixture@1.2.3"},
+		{"docker", []string{"run", "fixture:1.2.3", "--registry=https://app.example"}, "oci:fixture:1.2.3"},
+		{"npx", []string{"--package=fixture@1.2.3", "--registry=https://private.example", "run"}, ""},
+		{"npx", []string{"--package", "fixture@1.2.3", "--registry=https://private.example", "run"}, ""},
+		{"uvx", []string{"--from", "fixture==1.2.3", "--index-url", "https://private.example", "run"}, ""},
+	} {
+		if got := launchReference(clientconfig.Server{Command: tc.command, Args: tc.args}); got != tc.want {
+			t.Errorf("%s %v: got %q want %q", tc.command, tc.args, got, tc.want)
+		}
+	}
+}
 
 func TestLocalPackages(t *testing.T) {
 	t.Setenv("VET_SECRET_MUST_NOT_LEAK", "present")

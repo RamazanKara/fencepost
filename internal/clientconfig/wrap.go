@@ -1,6 +1,7 @@
 package clientconfig
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,7 +34,9 @@ func Wrap(data []byte, source, project, executable, policyPath, lockPath string)
 		}
 	}
 	var root map[string]any
-	if json.Unmarshal(jsonc(data), &root) != nil {
+	decoder := json.NewDecoder(bytes.NewReader(jsonc(data)))
+	decoder.UseNumber()
+	if decoder.Decode(&root) != nil {
 		return nil, errors.New("invalid config")
 	}
 	var groups []map[string]any

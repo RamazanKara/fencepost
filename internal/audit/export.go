@@ -51,6 +51,27 @@ func OpenConfigured(config policy.Audit, stdout io.Writer) (*Log, error) {
 		}
 		return nil, err
 	}
+	if file != nil {
+		info, err := file.Stat()
+		if err == nil {
+			for _, auditFile := range []*os.File{l.file, l.checkpoint, l.guard} {
+				var other os.FileInfo
+				other, err = auditFile.Stat()
+				if err != nil {
+					break
+				}
+				if os.SameFile(info, other) {
+					err = errors.New("audit export must not overwrite audit files")
+					break
+				}
+			}
+		}
+		if err != nil {
+			_ = file.Close()
+			_ = l.Close()
+			return nil, err
+		}
+	}
 	if !config.Stdout && file == nil && config.OTLPLogsEndpoint == "" && config.Syslog == "" {
 		return l, nil
 	}

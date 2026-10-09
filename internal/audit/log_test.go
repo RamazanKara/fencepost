@@ -12,6 +12,46 @@ import (
 	"testing"
 )
 
+func TestInvalidArgumentsDoNotCorruptLog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	l, err := Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if err := l.Write(Event{Kind: "policy", Arguments: json.RawMessage(`{`)}); err == nil {
+		t.Error("invalid arguments were accepted")
+	}
+	if err := l.Write(Event{Kind: "request"}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := Verify(path, nil); err != nil || n != 1 {
+		t.Fatalf("rejected event damaged the log: %d %v", n, err)
+	}
+}
+
+func TestOTLPRejectedSpans(t *testing.T) {
+	for _, body := range []string{`{"partialSuccess":{"rejectedSpans":"1"}}`, `{"partialSuccess":{"errorMessage":"rejected"}}`, `{`} {
+		t.Run(body, func(t *testing.T) {
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			defer s.Close()
+			l, err := Open(filepath.Join(t.TempDir(), "audit.jsonl"), s.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := l.Write(Event{Kind: "decision", Decision: "allow"}); err != nil {
+				_ = l.Close()
+				t.Fatal(err)
+			}
+			if err := l.Close(); err == nil {
+				t.Error("collector rejection was reported as successful export")
+			}
+		})
+	}
+}
+
 func TestChain(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	l, err := Open(path, "")

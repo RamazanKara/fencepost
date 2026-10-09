@@ -360,10 +360,10 @@ var pythonVersion = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)+(?:[a-z]+[0-9]+)?$`)
 var digest = regexp.MustCompile(`@sha256:[a-fA-F0-9]{64}$`)
 
 func unpinned(command string, args []string) bool {
-	base := strings.ToLower(strings.TrimSuffix(strings.TrimSuffix(filepath.Base(command), ".exe"), ".cmd"))
+	base := strings.TrimSuffix(strings.TrimSuffix(strings.ToLower(filepath.Base(command)), ".exe"), ".cmd")
 	if base == "cmd" || base == "sh" || base == "bash" || base == "powershell" || base == "pwsh" {
 		for i, a := range args {
-			if a == "/c" || a == "-c" || strings.EqualFold(a, "-Command") {
+			if strings.EqualFold(a, "/c") || a == "-c" || strings.EqualFold(a, "-Command") {
 				if i+1 < len(args) {
 					words := strings.Fields(strings.Join(args[i+1:], " "))
 					if len(words) > 0 {

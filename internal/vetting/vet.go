@@ -217,6 +217,7 @@ func launchReference(s clientconfig.Server) string {
 		args = args[1:]
 	}
 	values := map[string]bool{"--python": true, "--index-url": true, "--registry": true, "-e": true, "--env": true, "--env-file": true, "-v": true, "--volume": true, "--mount": true, "--name": true, "--network": true, "-p": true, "--publish": true, "--entrypoint": true, "--user": true, "-u": true, "--workdir": true, "-w": true, "--platform": true, "--pull": true}
+	var reference string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if strings.HasPrefix(a, "--registry") || strings.HasPrefix(a, "--index") || strings.HasPrefix(a, "--default-index") {
@@ -224,13 +225,20 @@ func launchReference(s clientconfig.Server) string {
 		}
 		if base != "docker" && (a == "--package" || a == "--from" || a == "-p") {
 			if i+1 < len(args) {
-				return prefix + args[i+1]
+				if reference == "" {
+					reference = prefix + args[i+1]
+				}
+				i++
+				continue
 			}
 			return ""
 		}
 		if base != "docker" && (strings.HasPrefix(a, "--package=") || strings.HasPrefix(a, "--from=")) {
-			_, value, _ := strings.Cut(a, "=")
-			return prefix + value
+			if reference == "" {
+				_, value, _ := strings.Cut(a, "=")
+				reference = prefix + value
+			}
+			continue
 		}
 		if values[a] {
 			i++
@@ -239,7 +247,10 @@ func launchReference(s clientconfig.Server) string {
 		if strings.HasPrefix(a, "-") {
 			continue
 		}
+		if reference != "" {
+			return reference
+		}
 		return prefix + a
 	}
-	return ""
+	return reference
 }

@@ -21,6 +21,19 @@ try {
   const edge = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
   browser = await chromium.launch({headless: true, ...(process.platform === 'win32' && existsSync(edge) ? {executablePath: edge} : {})});
   await mkdir(path.join(root, 'screens'), {recursive: true});
+  const restricted = await browser.newContext({colorScheme: 'light'});
+  await restricted.addInitScript(() => {
+    Object.defineProperty(window, 'localStorage', {get() { throw new DOMException('Storage disabled', 'SecurityError'); }});
+  });
+  const restrictedPage = await restricted.newPage();
+  const restrictedErrors = [];
+  restrictedPage.on('pageerror', error => restrictedErrors.push(error.message));
+  await restrictedPage.goto(url);
+  await restrictedPage.waitForSelector('#server-list .name', {timeout: 5000});
+  await restrictedPage.getByRole('button', {name: 'Dark theme', exact: true}).click();
+  assert.equal(await restrictedPage.locator('html').getAttribute('data-theme'), 'dark');
+  assert.deepEqual(restrictedErrors, [], 'Console failed with browser storage disabled');
+  await restricted.close();
   let count = 0;
   const viewports = ['en-US', 'de-DE'].flatMap(locale => [1280, 360, 393].map(width => ({locale, width})));
   for (const {locale, width} of viewports) {

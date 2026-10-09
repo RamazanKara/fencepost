@@ -69,6 +69,36 @@ func call(t *testing.T, e *Engine, id int, tool string) (*Request, *mcp.Message)
 	return r, denied
 }
 
+func TestRelayCancellationWhileUpstreamBlocked(t *testing.T) {
+	e := engine(t, "")
+	input, writer := io.Pipe()
+	upstream, upstreamWriter := io.Pipe()
+	output, outputWriter := io.Pipe()
+	defer writer.Close()
+	defer upstream.Close()
+	defer outputWriter.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- Relay(ctx, e, input, io.Discard, upstreamWriter, output) }()
+	request := message(t, `{"jsonrpc":"2.0","id":1,"method":"ping"}`)
+	if err := mcp.WriteFrame(writer, request); err != nil {
+		t.Fatal(err)
+	}
+	// Reading one byte leaves the synchronous frame write blocked in the pipe.
+	if _, err := upstream.Read(make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		_ = upstream.Close()
+		<-done
+		t.Fatal("relay cancellation did not interrupt the upstream write")
+	}
+}
+
 func TestLimits(t *testing.T) {
 	e := engine(t, "session_budget: 2\n")
 	for i := range 3 {

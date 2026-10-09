@@ -10,11 +10,78 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/RamazanKara/fencepost/internal/mcp"
 )
+
+type flushRecorder struct {
+	*httptest.ResponseRecorder
+	flushed chan struct{}
+	once    sync.Once
+}
+
+func (w *flushRecorder) Flush() {
+	w.ResponseRecorder.Flush()
+	w.once.Do(func() { close(w.flushed) })
+}
+
+func TestHTTPCancellation(t *testing.T) {
+	for _, mode := range []string{"notification", "disconnect"} {
+		t.Run(mode, func(t *testing.T) {
+			e := engine(t, "")
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				data, _ := io.ReadAll(r.Body)
+				m, _ := mcp.Parse(data)
+				if m.String("method") == "notifications/cancelled" {
+					w.WriteHeader(202)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, ": waiting\n\n")
+				w.(http.Flusher).Flush()
+				<-r.Context().Done()
+			}))
+			defer upstream.Close()
+			h, err := NewHTTP(e.Policy, e.Log, "s", e.lockPath, upstream.URL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer h.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			r := httptest.NewRequest("POST", "http://proxy/", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo"}}`)).WithContext(ctx)
+			w := &flushRecorder{ResponseRecorder: httptest.NewRecorder(), flushed: make(chan struct{})}
+			done := make(chan struct{})
+			go func() { defer close(done); h.ServeHTTP(w, r) }()
+			defer func() { cancel(); <-done }()
+			select {
+			case <-w.flushed:
+			case <-time.After(5 * time.Second):
+				t.Fatal("stream did not start")
+			}
+			if mode == "notification" {
+				notification := httptest.NewRequest("POST", "http://proxy/", strings.NewReader(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}`))
+				h.ServeHTTP(httptest.NewRecorder(), notification)
+			} else {
+				cancel()
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("cancelled HTTP request remained active")
+			}
+			h.base.mu.Lock()
+			pending := len(h.base.pending)
+			h.base.mu.Unlock()
+			if pending != 0 {
+				t.Fatalf("cancelled request retained: %d", pending)
+			}
+		})
+	}
+}
 
 func TestHTTPStreamAndSessions(t *testing.T) {
 	e := engine(t, "session_budget: 1\n")

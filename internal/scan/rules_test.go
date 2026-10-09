@@ -98,6 +98,7 @@ func TestPackagePins(t *testing.T) {
 		{"npx", []string{"-y", "pkg"}, true}, {"npx", []string{"-y", "@scope/pkg"}, true}, {"npx", []string{"--package=pkg@latest", "run"}, true}, {"npx", []string{"-y", "pkg@^1.0.0"}, true}, {"npx", []string{"-y", "@scope/pkg@1.2.3"}, false}, {"npx", []string{"-p", "pkg@1.2.3", "run"}, false}, {"npx", []string{"pkg@1.0.0-beta.1"}, false},
 		{"uvx", []string{"pkg"}, true}, {"uvx", []string{"--from", "pkg", "run"}, true}, {"uvx", []string{"--from=pkg==1.2.3", "run"}, false}, {"uvx", []string{"pkg==1.2.3"}, false}, {"uvx", []string{"pkg>=1.2"}, true},
 		{"docker", []string{"run", "image:latest"}, true}, {"docker", []string{"run", "-i", "--rm", "registry:5000/image"}, true}, {"docker", []string{"run", "-e", "TOKEN", "image:1.2.3"}, false}, {"docker", []string{"run", "image@sha256:" + strings.Repeat("a", 64)}, false}, {"docker", []string{"run", "image@sha256:wrong"}, true},
+		{"NPX.CMD", []string{"pkg"}, true}, {"NPX.CMD", []string{"pkg@1.2.3"}, false}, {"UVX.EXE", []string{"pkg"}, true}, {"CMD.EXE", []string{"/C", "npx", "pkg"}, true},
 		{"cmd", []string{"/c", "npx", "-y", "pkg"}, true}, {"sh", []string{"-c", "npx -y pkg"}, true}, {"server", nil, false},
 	} {
 		if got := unpinned(test.command, test.args); got != test.want {

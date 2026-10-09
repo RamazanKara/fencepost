@@ -37,7 +37,7 @@ func TestApprovalPage(t *testing.T) {
 		t.Run(decision, func(t *testing.T) {
 			result := make(chan string, 1)
 			go func() {
-				result <- Ask(context.Background(), config, Request{Server: "<script>alert(1)</script>", Tool: "read", Arguments: json.RawMessage(`{"token":"ghp_abcdefghijklmnopqrstuvwxyz123456","password":"tiny","text":"Authorization: Bearer opaque"}`)})
+				result <- Ask(context.Background(), config, Request{Server: "<script>alert(1)</script>", Tool: "read", Arguments: json.RawMessage(`{"token":"ghp_abcdefghijklmnopqrstuvwxyz123456","password":"tiny","text":"Authorization: Bearer opaque","ghp_abcdefghijklmnopqrstuvwxyz123456":"value"}`)})
 			}()
 			var pending []Request
 			deadline := time.Now().Add(time.Second)

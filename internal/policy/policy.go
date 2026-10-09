@@ -270,25 +270,47 @@ func Parse(data []byte, base string) (*Policy, error) {
 }
 
 func invalidNode(n *yaml.Node, enum bool) *yaml.Node {
-	if n.Tag == "!!null" && !enum {
-		return n
+	type aliasContext struct {
+		node *yaml.Node
+		enum bool
 	}
-	if n.Kind == yaml.MappingNode {
-		for i := 0; i < len(n.Content); i += 2 {
-			value := n.Content[i+1]
-			allowed := enum || (n.Content[i].Value == "enum" && value.Kind == yaml.SequenceNode)
-			if bad := invalidNode(value, allowed); bad != nil {
+	seen := map[aliasContext]bool{}
+	var visit func(*yaml.Node, bool) *yaml.Node
+	visit = func(n *yaml.Node, enum bool) *yaml.Node {
+		if n.Kind == yaml.AliasNode {
+			// The same anchor can be used both inside and outside enum values.
+			key := aliasContext{n.Alias, enum}
+			if seen[key] {
+				return nil
+			}
+			seen[key] = true
+			return visit(n.Alias, enum)
+		}
+		if n.Tag == "!!null" && !enum {
+			return n
+		}
+		if n.Kind == yaml.MappingNode {
+			for i := 0; i < len(n.Content); i += 2 {
+				value := n.Content[i+1]
+				resolved := value
+				if resolved.Kind == yaml.AliasNode {
+					resolved = resolved.Alias
+				}
+				allowed := enum || (n.Content[i].Value == "enum" && resolved.Kind == yaml.SequenceNode)
+				if bad := visit(value, allowed); bad != nil {
+					return bad
+				}
+			}
+			return nil
+		}
+		for _, child := range n.Content {
+			if bad := visit(child, enum); bad != nil {
 				return bad
 			}
 		}
 		return nil
 	}
-	for _, child := range n.Content {
-		if bad := invalidNode(child, enum); bad != nil {
-			return bad
-		}
-	}
-	return nil
+	return visit(n, enum)
 }
 
 var yamlLine = regexp.MustCompile(`line ([0-9]+)`)

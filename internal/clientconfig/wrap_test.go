@@ -7,6 +7,21 @@ import (
 	"testing"
 )
 
+func TestWrapPreservesNumbers(t *testing.T) {
+	for _, number := range []string{"9007199254740993", "1e400"} {
+		t.Run(number, func(t *testing.T) {
+			original := []byte(`{"mcpServers":{"s":{"command":"server"}},"unrelated":[` + number + `]}`)
+			wrapped, err := Wrap(original, "config", ".", "fencepost", "policy.yaml", "lock")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(wrapped, []byte(number)) {
+				t.Fatalf("unrelated number %s changed: %s", number, wrapped)
+			}
+		})
+	}
+}
+
 func TestWrapFormats(t *testing.T) {
 	files, err := filepath.Glob("../../testdata/configs/*.json")
 	if err != nil {

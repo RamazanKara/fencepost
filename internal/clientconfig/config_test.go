@@ -9,6 +9,21 @@ import (
 	"testing"
 )
 
+func TestMalformedProjects(t *testing.T) {
+	for _, raw := range []string{`{"projects":["."]}`, `{"projects":"."}`} {
+		t.Run(raw, func(t *testing.T) {
+			defer func() {
+				if failure := recover(); failure != nil {
+					t.Errorf("malformed projects caused a panic: %v", failure)
+				}
+			}()
+			if _, err := Parse([]byte(raw), "config", "."); err == nil {
+				t.Error("accepted a non-object projects field")
+			}
+		})
+	}
+}
+
 func TestFormats(t *testing.T) {
 	for _, test := range []struct {
 		file      string

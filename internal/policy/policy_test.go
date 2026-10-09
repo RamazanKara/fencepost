@@ -22,6 +22,27 @@ func testPolicy(t *testing.T, rule Argument) *Policy {
 	return p
 }
 
+func TestNullAliases(t *testing.T) {
+	raw := "version: 1\nservers:\n  s:\n    default: allow\n    tools:\n      - name: echo\n        action: allow\n        arguments:\n          - path: $.value\n            enum: [&nothing null, *nothing]\noutput: {redact_secrets: *nothing}\n"
+	if _, err := Parse([]byte(raw), t.TempDir()); err == nil {
+		t.Error("accepted null outside enum through an alias")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "policy.yaml"), []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(dir); err == nil {
+		t.Error("directory policy accepted null through an alias")
+	}
+}
+
+func TestEnumAliases(t *testing.T) {
+	raw := "version: 1\nservers: {s: {default: deny, tools: [{name: echo, action: allow, arguments: [{path: $.value, enum: &values [null]}, {path: $.other, enum: *values}]}]}}"
+	if _, err := Parse([]byte(raw), t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPaths(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
